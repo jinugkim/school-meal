@@ -34,7 +34,7 @@ def required_env(name):
 
 
 def get_today_meal(api_key, office_code, school_code, meal_date=None):
-    """Return (menu, calories); an empty menu means no meal data was published."""
+    """Return meals grouped by NEIS meal name; an empty list means no meal data."""
     date = meal_date or datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y%m%d")
     response = requests.get(
         NEIS_URL,
@@ -51,18 +51,56 @@ def get_today_meal(api_key, office_code, school_code, meal_date=None):
         # NEIS returns RESULT when the query is valid but there are no rows.
         result = payload.get("RESULT", {})
         if result.get("CODE") in {"INFO-200", "INFO-201"}:
-            return [], ""
+            return []
         raise RuntimeError(f"NEIS 응답에 급식 정보가 없습니다: {result.get('MESSAGE', '알 수 없는 응답')}")
 
     rows = payload["mealServiceDietInfo"][-1].get("row", [])
-    menu, calories = [], []
+    meals = {}
     for row in rows:
+        meal_name = str(row.get("MMEAL_SC_NM", "")).strip() or "급식"
+        meal = meals.setdefault(meal_name, {"menu": [], "calories": []})
         raw = row.get("DDISH_NM", "")
-        menu.extend(line.strip() for line in clean_dish_name(raw).splitlines() if line.strip())
+        meal["menu"].extend(line.strip() for line in clean_dish_name(raw).splitlines() if line.strip())
         calorie = row.get("CAL_INFO", "")
         if calorie:
-            calories.append(str(calorie).strip())
-    return menu, " / ".join(dict.fromkeys(calories))
+            meal["calories"].append(str(calorie).strip())
+    return [
+        (name, details["menu"], " / ".join(dict.fromkeys(details["calories"])))
+        for name, details in meals.items()
+        if details["menu"]
+    ]
+
+
+def format_meal_message(date_label, day_label, meals):
+    title = f"🍚 {date_label} {day_label}의 급식"
+    sections = []
+    for name, dishes, calories in meals:
+        content = " · ".join(dishes)
+        if calories:
+            content += f" (열량 {calories})"
+        sections.append((name, content))
+
+    message = title + "\n\n" + "\n\n".join(
+        f"【{name}】\n{content}" for name, content in sections
+    )
+    if len(message) <= 200:
+        return message
+
+    # Kakao's text template has a 200-character limit. On longer menus,
+    # reserve room for every meal heading so dinner is not silently omitted.
+    prefix = title + "\n"
+    labels = [f"【{name}】 " for name, _ in sections]
+    separators_length = max(0, len(sections) - 1)
+    content_budget = max(0, 200 - len(prefix) - sum(map(len, labels)) - separators_length)
+    per_section_budget = content_budget // max(1, len(sections))
+    compact_sections = []
+    for (name, content), label in zip(sections, labels):
+        if len(content) > per_section_budget and per_section_budget:
+            content = content[: per_section_budget - 1] + "…"
+        else:
+            content = content[:per_section_budget]
+        compact_sections.append(label + content)
+    return prefix + "\n".join(compact_sections)
 
 
 def get_access_token(refresh_token, rest_api_key, client_secret=""):
@@ -153,14 +191,15 @@ def check_neis():
     school_code = required_env("SCHOOL_CODE")
 
     today = datetime.now(ZoneInfo("Asia/Seoul"))
-    menu, calories = get_today_meal(api_key, office_code, school_code)
+    meals = get_today_meal(api_key, office_code, school_code)
     logger.info("NEIS 조회 날짜: %s", today.strftime("%Y-%m-%d"))
-    if not menu:
+    if not meals:
         logger.info("오늘 등록된 급식 정보가 없습니다.")
         return 0
-    logger.info("오늘의 급식:\n%s", "\n".join(f"• {dish}" for dish in menu))
-    if calories:
-        logger.info("열량: %s", calories)
+    for name, dishes, calories in meals:
+        logger.info("%s:\n%s", name, "\n".join(f"• {dish}" for dish in dishes))
+        if calories:
+            logger.info("열량: %s", calories)
     return 0
 
 
@@ -179,14 +218,14 @@ def main():
     # Query and report NEIS before checking Kakao settings so the data source
     # can be verified independently during initial setup.
     try:
-        menu, calories = get_today_meal(api_key, office_code, school_code, meal_date)
-        if menu:
-            message = f"🍚 {date_label} {meal_day_label}의 급식\n\n" + "\n".join(f"• {dish}" for dish in menu)
-            if calories:
-                message += f"\n\n열량: {calories}"
-            logger.info("NEIS 급식 조회 완료:\n%s", "\n".join(f"• {dish}" for dish in menu))
-            if calories:
-                logger.info("열량: %s", calories)
+        meals = get_today_meal(api_key, office_code, school_code, meal_date)
+        if meals:
+            message = format_meal_message(date_label, meal_day_label, meals)
+            logger.info("NEIS 급식 조회 완료 (%d개 식사 구분):", len(meals))
+            for name, dishes, calories in meals:
+                logger.info("%s: %s", name, " / ".join(dishes))
+                if calories:
+                    logger.info("열량: %s", calories)
         else:
             logger.info("NEIS 조회 완료: %s 등록된 급식 정보가 없습니다.", date_label)
             if is_scheduled:
@@ -207,9 +246,10 @@ def main():
             access_token, refresh_token_rotated = get_access_token(refresh_token, kakao_key, client_secret)
             recipient_message = message
             if refresh_token_rotated:
-                recipient_message += (
-                    "\n\n⚠️ 카카오 인증 정보 갱신이 필요합니다. "
-                    "새 refresh token을 발급해 GitHub Secret KAKAO_REFRESH_TOKENS를 교체해 주세요."
+                recipient_message = (
+                    "⚠️ 카카오 인증 정보 갱신이 필요합니다. "
+                    "새 refresh token을 발급해 GitHub Secret KAKAO_REFRESH_TOKENS를 교체해 주세요.\n\n"
+                    + message
                 )
             send_kakao_message(access_token, recipient_message)
             logger.info("수신자 %d/%d 전송 완료", index, len(tokens))
