@@ -71,36 +71,17 @@ def get_today_meal(api_key, office_code, school_code, meal_date=None):
     ]
 
 
-def format_meal_message(date_label, day_label, meals):
-    title = f"🍚 {date_label} {day_label}의 급식"
-    sections = []
-    for name, dishes, calories in meals:
-        content = " · ".join(dishes)
-        if calories:
-            content += f" (열량 {calories})"
-        sections.append((name, content))
-
-    message = title + "\n\n" + "\n\n".join(
-        f"【{name}】\n{content}" for name, content in sections
-    )
+def format_meal_message(date_label, day_label, meal):
+    name, dishes, calories = meal
+    title = f"🍚 {date_label} {day_label} {name}"
+    content = "\n".join(f"• {dish}" for dish in dishes)
+    if calories:
+        content += f"\n열량: {calories}"
+    message = f"{title}\n\n{content}"
     if len(message) <= 200:
         return message
-
-    # Kakao's text template has a 200-character limit. On longer menus,
-    # reserve room for every meal heading so dinner is not silently omitted.
-    prefix = title + "\n"
-    labels = [f"【{name}】 " for name, _ in sections]
-    separators_length = max(0, len(sections) - 1)
-    content_budget = max(0, 200 - len(prefix) - sum(map(len, labels)) - separators_length)
-    per_section_budget = content_budget // max(1, len(sections))
-    compact_sections = []
-    for (name, content), label in zip(sections, labels):
-        if len(content) > per_section_budget and per_section_budget:
-            content = content[: per_section_budget - 1] + "…"
-        else:
-            content = content[:per_section_budget]
-        compact_sections.append(label + content)
-    return prefix + "\n".join(compact_sections)
+    # Kakao's text template is limited to 200 characters.
+    return message[:199] + "…"
 
 
 def get_access_token(refresh_token, rest_api_key, client_secret=""):
@@ -220,21 +201,24 @@ def main():
     try:
         meals = get_today_meal(api_key, office_code, school_code, meal_date)
         if meals:
-            message = format_meal_message(date_label, meal_day_label, meals)
             logger.info("NEIS 급식 조회 완료 (%d개 식사 구분):", len(meals))
             for name, dishes, calories in meals:
                 logger.info("%s: %s", name, " / ".join(dishes))
                 if calories:
                     logger.info("열량: %s", calories)
+            messages = [
+                format_meal_message(date_label, meal_day_label, meal)
+                for meal in meals
+            ]
         else:
             logger.info("NEIS 조회 완료: %s 등록된 급식 정보가 없습니다.", date_label)
             if is_scheduled:
                 logger.info("예약 실행이며 급식 정보가 없어 카카오 메시지 전송을 건너뜁니다.")
                 return 0
-            message = f"🍚 테스트 메시지입니다. {date_label} 등록된 급식 정보가 없습니다."
+            messages = [f"🍚 테스트 메시지입니다. {date_label} 등록된 급식 정보가 없습니다."]
     except Exception:
         logger.exception("NEIS 급식 조회 실패")
-        message = f"🍚 {date_label} 급식 정보를 가져오지 못했습니다. 잠시 후 NEIS 서비스 상태를 확인해 주세요."
+        messages = [f"🍚 {date_label} 급식 정보를 가져오지 못했습니다. 잠시 후 NEIS 서비스 상태를 확인해 주세요."]
 
     kakao_key = required_env("KAKAO_REST_API_KEY")
     tokens = load_refresh_tokens()
@@ -244,18 +228,36 @@ def main():
     for index, refresh_token in enumerate(tokens, start=1):
         try:
             access_token, refresh_token_rotated = get_access_token(refresh_token, kakao_key, client_secret)
-            recipient_message = message
-            if refresh_token_rotated:
-                recipient_message = (
-                    "⚠️ 카카오 인증 정보 갱신이 필요합니다. "
-                    "새 refresh token을 발급해 GitHub Secret KAKAO_REFRESH_TOKENS를 교체해 주세요.\n\n"
-                    + message
-                )
-            send_kakao_message(access_token, recipient_message)
-            logger.info("수신자 %d/%d 전송 완료", index, len(tokens))
         except Exception:
             failures += 1
-            logger.exception("수신자 %d/%d 전송 실패; 다음 계정을 계속 처리합니다.", index, len(tokens))
+            logger.exception("수신자 %d/%d 토큰 갱신 실패; 다음 계정을 계속 처리합니다.", index, len(tokens))
+            continue
+
+        recipient_failed = False
+        for message_index, message in enumerate(messages, start=1):
+            try:
+                send_kakao_message(access_token, message)
+                logger.info("수신자 %d/%d 메시지 %d/%d 전송 완료", index, len(tokens), message_index, len(messages))
+            except Exception:
+                recipient_failed = True
+                logger.exception(
+                    "수신자 %d/%d 메시지 %d/%d 전송 실패; 다음 메시지를 계속 처리합니다.",
+                    index, len(tokens), message_index, len(messages),
+                )
+
+        if refresh_token_rotated:
+            try:
+                send_kakao_message(
+                    access_token,
+                    "⚠️ 카카오 인증 정보 갱신이 필요합니다. 새 refresh token을 발급해 "
+                    "GitHub Secret KAKAO_REFRESH_TOKENS를 교체해 주세요.",
+                )
+            except Exception:
+                recipient_failed = True
+                logger.exception("수신자 %d/%d 토큰 갱신 안내 전송 실패.", index, len(tokens))
+
+        if recipient_failed:
+            failures += 1
     if failures == len(tokens):
         return 1
     if failures:
