@@ -190,11 +190,17 @@ def main():
     school_code = required_env("SCHOOL_CODE")
     today = datetime.now(ZoneInfo("Asia/Seoul"))
     day_offset = int(os.environ.get("MEAL_DAY_OFFSET", "0"))
+    event_name = os.environ.get("GITHUB_EVENT_NAME", "")
+    is_scheduled = event_name == "schedule"
+    if event_name == "workflow_dispatch" and today.weekday() >= 5:
+        day_offset = 7 - today.weekday()
     meal_day = today + timedelta(days=day_offset)
     meal_date = meal_day.strftime("%Y%m%d")
     date_label = meal_day.strftime("%Y년 %m월 %d일")
-    meal_day_label = "내일" if day_offset == 1 else "오늘"
-    is_scheduled = os.environ.get("GITHUB_EVENT_NAME") == "schedule"
+    if day_offset and meal_day.weekday() == 0 and today.weekday() >= 5:
+        meal_day_label = "월요일"
+    else:
+        meal_day_label = "내일" if day_offset == 1 else "오늘"
 
     # Query and report NEIS before checking Kakao settings so the data source
     # can be verified independently during initial setup.
