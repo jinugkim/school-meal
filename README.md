@@ -84,7 +84,7 @@ refresh token 목록은 다음처럼 JSON 배열로 입력합니다. 따옴표�
 - 급식 데이터가 없는 날에는 주말·공휴일·방학일 수 있다는 안내를 보냅니다.
 - NEIS 요청이 실패하면 급식 조회 실패 안내를 카카오톡으로 보내고 수신자 전송을 계속 시도합니다.
 - 한 카카오 계정이 만료/실패해도 다른 계정 전송은 계속됩니다. 모든 수신자 전송이 실패하면 워크플로가 실패로 표시됩니다.
-- `refresh token rotated` 로그가 보이면 새 토큰이 발급된 해당 계정의 토큰을 `KAKAO_REFRESH_TOKENS` Secret에 반영하세요. 오래된 토큰은 만료될 수 있습니다.
+- refresh token이 교체되면 해당 계정으로 전송하는 급식 메시지에 Secret 갱신 안내가 포함됩니다. 새 토큰 값은 알림에 포함하지 않습니다. `get_tokens.py`로 새 토큰을 발급해 `KAKAO_REFRESH_TOKENS` Secret을 교체하세요.
 - Kakao REST API 키의 Client Secret 설정을 변경했다면 GitHub Secret도 함께 수정해야 합니다.
 
 ## 로컬에서 급식 메시지 실행

@@ -90,9 +90,10 @@ def get_access_token(refresh_token, rest_api_key, client_secret=""):
     if not token:
         raise RuntimeError("카카오 토큰 응답에 access_token이 없습니다.")
     # Kakao may rotate refresh tokens. The new value must be saved back to the repository secret.
-    if payload.get("refresh_token"):
+    refresh_token_rotated = bool(payload.get("refresh_token"))
+    if refresh_token_rotated:
         logger.warning("Kakao refresh token rotated; update KAKAO_REFRESH_TOKENS secret with the new value.")
-    return token
+    return token, refresh_token_rotated
 
 
 def send_kakao_message(access_token, message):
@@ -195,8 +196,14 @@ def main():
     failures = 0
     for index, refresh_token in enumerate(tokens, start=1):
         try:
-            access_token = get_access_token(refresh_token, kakao_key, client_secret)
-            send_kakao_message(access_token, message)
+            access_token, refresh_token_rotated = get_access_token(refresh_token, kakao_key, client_secret)
+            recipient_message = message
+            if refresh_token_rotated:
+                recipient_message += (
+                    "\n\n⚠️ 카카오 인증 정보 갱신이 필요합니다. "
+                    "새 refresh token을 발급해 GitHub Secret KAKAO_REFRESH_TOKENS를 교체해 주세요."
+                )
+            send_kakao_message(access_token, recipient_message)
             logger.info("수신자 %d/%d 전송 완료", index, len(tokens))
         except Exception:
             failures += 1
