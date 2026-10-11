@@ -182,25 +182,7 @@ def get_friend_uuids(access_token, nicknames):
             params={"limit": 100, "offset": offset, "order": "asc"},
             timeout=20,
         )
-        try:
-            response.raise_for_status()
-        except requests.HTTPError as exc:
-            try:
-                error_info = response.json()
-            except ValueError:
-                error_info = {}
-            details = [
-                str(value) for value in (error_info.get("code", ""), error_info.get("msg", ""))
-                if value != ""
-            ]
-            scopes = error_info.get("required_scopes", [])
-            if scopes:
-                details.append(f"필요 동의항목: {', '.join(scopes)}")
-            if details:
-                raise RuntimeError(
-                    f"카카오 친구 목록 조회 실패 ({response.status_code}): {'; '.join(details)}"
-                ) from exc
-            raise
+        response.raise_for_status()
         payload = response.json()
         page = payload.get("elements", [])
         friends.extend(page)
