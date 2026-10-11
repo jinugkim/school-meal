@@ -91,6 +91,8 @@ refresh token 목록은 다음처럼 JSON 배열로 입력합니다. 따옴표�
 
 필요한 환경 변수를 설정한 뒤 `python main.py`를 실행할 수 있습니다. 필수 값은 위 GitHub Secrets와 동일합니다. `KAKAO_REFRESH_TOKENS`는 JSON 배열 또는 쉼표로 구분한 값으로 읽습니다.
 
+카카오 연동 전에 NEIS 조회만 확인하려면 `NEIS_API_KEY`, `OFFICE_CODE`, `SCHOOL_CODE`를 설정한 뒤 `python main.py --check-neis`를 실행합니다. 이 모드는 급식 메뉴와 열량을 출력하고 카카오 설정은 확인하지 않습니다. 일반 실행에서는 NEIS 조회 결과를 먼저 로그에 표시한 뒤 Kakao 환경 변수를 확인합니다.
+
 ## 보안
 
 API 키와 토큰을 소스 코드, 커밋, 이슈, 공개 로그에 넣지 마세요. 유출이 의심되면 해당 카카오 앱/토큰을 폐기 또는 재발급하고 GitHub Secret을 갱신하세요. 토큰 발급 도구는 `127.0.0.1`에서만 실행합니다.

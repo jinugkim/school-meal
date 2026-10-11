@@ -70,7 +70,21 @@ def get_access_token(refresh_token, rest_api_key, client_secret=""):
     if client_secret:
         data["client_secret"] = client_secret
     response = requests.post(KAKAO_TOKEN_URL, data=data, timeout=20)
-    response.raise_for_status()
+    try:
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        # Kakao's response identifies issues such as invalid_grant or
+        # invalid_client. Log only its error fields, never request credentials.
+        try:
+            error_info = response.json()
+        except ValueError:
+            error_info = {}
+        error = error_info.get("error", "")
+        description = error_info.get("error_description", "")
+        detail = ": ".join(value for value in (error, description) if value)
+        if detail:
+            raise RuntimeError(f"카카오 토큰 갱신 실패 ({response.status_code}): {detail}") from exc
+        raise
     payload = response.json()
     token = payload.get("access_token")
     if not token:
@@ -116,27 +130,52 @@ def load_refresh_tokens():
     return tokens
 
 
+def check_neis():
+    """Query NEIS and print the result without requiring Kakao credentials."""
+    api_key = required_env("NEIS_API_KEY")
+    office_code = required_env("OFFICE_CODE")
+    school_code = required_env("SCHOOL_CODE")
+
+    today = datetime.now(ZoneInfo("Asia/Seoul"))
+    menu, calories = get_today_meal(api_key, office_code, school_code)
+    logger.info("NEIS 조회 날짜: %s", today.strftime("%Y-%m-%d"))
+    if not menu:
+        logger.info("오늘 등록된 급식 정보가 없습니다.")
+        return 0
+    logger.info("오늘의 급식:\n%s", "\n".join(f"• {dish}" for dish in menu))
+    if calories:
+        logger.info("열량: %s", calories)
+    return 0
+
+
 def main():
     api_key = required_env("NEIS_API_KEY")
     office_code = required_env("OFFICE_CODE")
     school_code = required_env("SCHOOL_CODE")
-    kakao_key = required_env("KAKAO_REST_API_KEY")
-    tokens = load_refresh_tokens()
-    client_secret = os.environ.get("KAKAO_CLIENT_SECRET", "").strip()
     today = datetime.now(ZoneInfo("Asia/Seoul"))
     date_label = today.strftime("%Y년 %m월 %d일")
 
+    # Query and report NEIS before checking Kakao settings so the data source
+    # can be verified independently during initial setup.
     try:
         menu, calories = get_today_meal(api_key, office_code, school_code)
         if menu:
             message = f"🍚 {date_label} 오늘의 급식\n\n" + "\n".join(f"• {dish}" for dish in menu)
             if calories:
                 message += f"\n\n열량: {calories}"
+            logger.info("NEIS 급식 조회 완료:\n%s", "\n".join(f"• {dish}" for dish in menu))
+            if calories:
+                logger.info("열량: %s", calories)
         else:
             message = f"🍚 {date_label} 오늘은 등록된 급식 정보가 없습니다. (주말·공휴일·방학일 수 있습니다)"
+            logger.info("NEIS 조회 완료: 오늘 등록된 급식 정보가 없습니다.")
     except Exception:
         logger.exception("NEIS 급식 조회 실패")
         message = f"🍚 {date_label} 급식 정보를 가져오지 못했습니다. 잠시 후 NEIS 서비스 상태를 확인해 주세요."
+
+    kakao_key = required_env("KAKAO_REST_API_KEY")
+    tokens = load_refresh_tokens()
+    client_secret = os.environ.get("KAKAO_CLIENT_SECRET", "").strip()
 
     failures = 0
     for index, refresh_token in enumerate(tokens, start=1):
@@ -156,6 +195,8 @@ def main():
 
 if __name__ == "__main__":
     try:
+        if "--check-neis" in sys.argv[1:]:
+            sys.exit(check_neis())
         sys.exit(main())
     except (ValueError, requests.RequestException) as exc:
         logger.error("실행 설정 또는 서비스 요청 오류: %s", exc)
