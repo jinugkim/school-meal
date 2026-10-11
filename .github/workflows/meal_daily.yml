@@ -2,8 +2,10 @@ name: Daily school meal
 
 on:
   schedule:
-    # 07:30 KST, Monday to Friday (22:30 UTC, Sunday to Thursday)
-    - cron: "30 22 * * 0-4"
+    # 21:00 KST daily: check tomorrow's menu (12:00 UTC)
+    - cron: "0 12 * * *"
+    # 07:20 KST, Monday to Friday (22:20 UTC, Sunday to Thursday)
+    - cron: "20 22 * * 0-4"
   workflow_dispatch:
 
 permissions:
@@ -24,6 +26,7 @@ jobs:
       KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
       KAKAO_CLIENT_SECRET: ${{ secrets.KAKAO_CLIENT_SECRET }}
       KAKAO_REFRESH_TOKENS: ${{ secrets.KAKAO_REFRESH_TOKENS }}
+      MEAL_DAY_OFFSET: ${{ github.event.schedule == '0 12 * * *' && '1' || '0' }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -34,5 +37,5 @@ jobs:
           cache: pip
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
-      - name: Send today's meal
+      - name: Check and send meal
         run: python main.py

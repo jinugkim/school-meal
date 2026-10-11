@@ -5,7 +5,7 @@ import logging
 import os
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import requests
@@ -169,22 +169,30 @@ def main():
     office_code = required_env("OFFICE_CODE")
     school_code = required_env("SCHOOL_CODE")
     today = datetime.now(ZoneInfo("Asia/Seoul"))
-    date_label = today.strftime("%Y년 %m월 %d일")
+    day_offset = int(os.environ.get("MEAL_DAY_OFFSET", "0"))
+    meal_day = today + timedelta(days=day_offset)
+    meal_date = meal_day.strftime("%Y%m%d")
+    date_label = meal_day.strftime("%Y년 %m월 %d일")
+    meal_day_label = "내일" if day_offset == 1 else "오늘"
+    is_scheduled = os.environ.get("GITHUB_EVENT_NAME") == "schedule"
 
     # Query and report NEIS before checking Kakao settings so the data source
     # can be verified independently during initial setup.
     try:
-        menu, calories = get_today_meal(api_key, office_code, school_code)
+        menu, calories = get_today_meal(api_key, office_code, school_code, meal_date)
         if menu:
-            message = f"🍚 {date_label} 오늘의 급식\n\n" + "\n".join(f"• {dish}" for dish in menu)
+            message = f"🍚 {date_label} {meal_day_label}의 급식\n\n" + "\n".join(f"• {dish}" for dish in menu)
             if calories:
                 message += f"\n\n열량: {calories}"
             logger.info("NEIS 급식 조회 완료:\n%s", "\n".join(f"• {dish}" for dish in menu))
             if calories:
                 logger.info("열량: %s", calories)
         else:
-            message = f"🍚 {date_label} 오늘은 등록된 급식 정보가 없습니다. (주말·공휴일·방학일 수 있습니다)"
-            logger.info("NEIS 조회 완료: 오늘 등록된 급식 정보가 없습니다.")
+            logger.info("NEIS 조회 완료: %s 등록된 급식 정보가 없습니다.", date_label)
+            if is_scheduled:
+                logger.info("예약 실행이며 급식 정보가 없어 카카오 메시지 전송을 건너뜁니다.")
+                return 0
+            message = f"🍚 테스트 메시지입니다. {date_label} 등록된 급식 정보가 없습니다."
     except Exception:
         logger.exception("NEIS 급식 조회 실패")
         message = f"🍚 {date_label} 급식 정보를 가져오지 못했습니다. 잠시 후 NEIS 서비스 상태를 확인해 주세요."
