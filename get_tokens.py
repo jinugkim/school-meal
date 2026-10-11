@@ -27,7 +27,13 @@ def index():
         ), 400
     state = secrets.token_urlsafe(32)
     session["oauth_state"] = state
-    query = urlencode({"client_id": REST_API_KEY, "redirect_uri": REDIRECT_URI, "response_type": "code", "state": state})
+    query = urlencode({
+        "client_id": REST_API_KEY,
+        "redirect_uri": REDIRECT_URI,
+        "response_type": "code",
+        "scope": "talk_message",
+        "state": state,
+    })
     return page(
         "카카오 refresh token 발급",
         "<p>발급받을 카카오 계정으로 로그인한 뒤 동의해 주세요. 토큰은 이 브라우저에만 표시됩니다.</p>"

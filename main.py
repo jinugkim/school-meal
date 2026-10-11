@@ -108,7 +108,22 @@ def send_kakao_message(access_token, message):
         data={"template_object": json.dumps(template, ensure_ascii=False)},
         timeout=20,
     )
-    response.raise_for_status()
+    try:
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        try:
+            error_info = response.json()
+        except ValueError:
+            error_info = {}
+        code = error_info.get("code", "")
+        message = error_info.get("msg", "")
+        scopes = error_info.get("required_scopes", [])
+        details = [str(value) for value in (code, message) if value != ""]
+        if scopes:
+            details.append(f"필요 동의항목: {', '.join(scopes)}")
+        if details:
+            raise RuntimeError(f"카카오 메시지 전송 실패 ({response.status_code}): {'; '.join(details)}") from exc
+        raise
     result = response.json()
     if result.get("result_code") != 0:
         raise RuntimeError(f"카카오 메시지 전송 실패: {result}")
