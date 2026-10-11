@@ -77,6 +77,36 @@ refresh token 목록은 다음처럼 JSON 배열로 입력합니다. 따옴표�
 
 한 계정만 등록할 때도 배열 형식을 사용할 수 있습니다. 코드의 기본 설정은 모든 토큰을 같은 학교 급식 메시지 수신 대상으로 취급합니다.
 
+## Refresh token 갱신
+
+갱신 대상은 인증서가 아니라 카카오 **refresh token**입니다. 기본 유효기간은 2개월이며, 만료 1개월 전부터 갱신할 수 있습니다. 카카오가 새 토큰을 반환하면 기존 토큰은 폐기됩니다. [카카오 토큰 안내](https://developers.kakao.com/docs/ko/kakaologin/common)
+
+알림 메시지를 받으면 다음 순서로 갱신합니다.
+
+1. 저장소에서 가상환경을 활성화하고, 최초 발급 때와 같은 앱의 REST API 키를 설정합니다.
+
+   ```bash
+   source .venv/bin/activate
+   export KAKAO_REST_API_KEY='같은 앱의 REST API 키'
+   export KAKAO_CLIENT_SECRET='Client Secret이 켜져 있으면 현재 값'
+   python get_tokens.py
+   ```
+
+   Client Secret이 꺼져 있다면 `export KAKAO_CLIENT_SECRET=...` 대신 `unset KAKAO_CLIENT_SECRET`을 실행합니다.
+2. `http://127.0.0.1:5000`에서 해당 카카오 계정으로 로그인하고 동의한 뒤 새 refresh token을 복사합니다.
+3. GitHub **Settings → Secrets and variables → Actions → `KAKAO_REFRESH_TOKENS`**를 새 토큰으로 교체합니다. 여러 계정이면 해당 토큰만 바꾸고 나머지는 유지합니다. 새 토큰은 채팅이나 코드에 붙여넣지 않습니다.
+4. Actions에서 워크플로를 수동 실행해 전송을 확인하고, 로컬 서버는 `Ctrl+C`로 종료합니다.
+
+갱신 때 자주 발생하는 설정 오류:
+
+| 오류 | 확인할 설정 |
+| --- | --- |
+| `KOE004` | Kakao Developers에서 **카카오 로그인 사용 설정**이 ON인지 확인 |
+| `KOE006` | Redirect URI가 `http://127.0.0.1:5000/oauth`와 정확히 일치하는지 확인 |
+| 403 `insufficient scopes` | `카카오 로그인 → 동의항목`에서 `talk_message`를 사용할 수 있게 하고, 재로그인 때 메시지 전송 동의 |
+| `invalid_client` | 토큰 발급에 사용한 앱의 REST API 키와 Client Secret이 GitHub 및 로컬 설정과 같은지 확인 |
+| `expired_or_invalid_refresh_token` | 만료·폐기된 토큰이므로 위 절차로 새 토큰 발급 |
+
 ## 6. 실행 확인과 운영
 
 **Actions → Daily school meal → Run workflow**로 수동 실행하고 로그를 확인합니다. 주말에 수동 실행하면 월요일 급식을 조회합니다. 평일 수동 실행은 당일 급식을 조회하며, 급식 데이터가 없어도 테스트 안내를 보냅니다. 실행 로그에는 토큰을 출력하지 않습니다. 예약 실행은 매일 전날 급식을 확인하는 UTC `12:00`(KST `21:00`)과, 당일 급식을 확인하는 UTC `22:20`(KST 평일 `07:20`)입니다. 예약 실행에서 해당 날짜의 NEIS 급식 정보가 없으면 카카오 메시지를 보내지 않습니다.
