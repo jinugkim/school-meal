@@ -68,6 +68,7 @@ python get_tokens.py
 | `KAKAO_REST_API_KEY` | Kakao 앱 REST API 키 |
 | `KAKAO_CLIENT_SECRET` | Client Secret이 켜져 있으면 필수. 꺼져 있으면 빈 값 또는 Secret 생략 가능 |
 | `KAKAO_REFRESH_TOKENS` | 가족별 refresh token 목록(JSON 배열 권장) |
+| `KAKAO_FRIEND_NICKNAMES` | 선택 항목. 내 카카오 친구 목록에 표시되는 가족 닉네임(JSON 배열). 설정 시 첫 번째 계정이 UUID를 조회해 친구 메시지도 보냄 |
 
 refresh token 목록은 다음처럼 JSON 배열로 입력합니다. 따옴표는 JSON 문법에 맞게 포함합니다.
 
@@ -76,6 +77,10 @@ refresh token 목록은 다음처럼 JSON 배열로 입력합니다. 따옴표�
 ```
 
 한 계정만 등록할 때도 배열 형식을 사용할 수 있습니다. 코드의 기본 설정은 모든 토큰을 같은 학교 급식 메시지 수신 대상으로 취급합니다.
+
+내 ‘나와의 채팅’ 외에 배우자와 아이에게도 보내려면 `KAKAO_FRIEND_NICKNAMES` Secret에 발신자 계정의 카카오톡 친구 목록에 표시되는 닉네임을 JSON 배열로 등록합니다. 예: `["배우자 닉네임", "아이 닉네임"]`. 이 값이 비어 있으면 기존처럼 각 토큰 계정의 나와의 채팅으로만 보냅니다. 설정하면 첫 번째 `KAKAO_REFRESH_TOKENS` 계정으로 친구 목록에서 닉네임을 정확히 찾아 UUID를 조회한 뒤 가족에게 발송합니다. 닉네임이 중복되거나 찾을 수 없으면 오발송 방지를 위해 친구 발송을 실패 처리합니다. 가족은 발신자의 카카오톡 친구여야 하며 앱 멤버로 연결되고 `friends`, `talk_message` 동의가 필요합니다. 카카오의 친구 메시지 기능 사용 권한이 앱에 승인되어야 합니다.
+
+발신자 토큰에 친구 목록 동의가 포함되어 있지 않다면 `get_tokens.py`로 발신자 계정 토큰을 다시 발급해 `KAKAO_REFRESH_TOKENS` 첫 번째 항목을 교체하세요. 토큰 발급 화면은 `friends`와 `talk_message` 권한을 요청합니다. 기존 나와의 채팅은 계속 각 설정 계정으로 전달되며, 가족 친구 메시지는 첫 번째 계정에서 한 번만 발송됩니다.
 
 ## Refresh token 갱신
 
@@ -103,7 +108,7 @@ refresh token 목록은 다음처럼 JSON 배열로 입력합니다. 따옴표�
 | --- | --- |
 | `KOE004` | Kakao Developers에서 **카카오 로그인 사용 설정**이 ON인지 확인 |
 | `KOE006` | Redirect URI가 `http://127.0.0.1:5000/oauth`와 정확히 일치하는지 확인 |
-| 403 `insufficient scopes` | `카카오 로그인 → 동의항목`에서 `talk_message`를 사용할 수 있게 하고, 재로그인 때 메시지 전송 동의 |
+| 403 `insufficient scopes` | `카카오 로그인 → 동의항목`에서 `friends`, `talk_message`를 사용할 수 있게 하고, 발신자 계정으로 재로그인해 두 항목에 동의 |
 | `invalid_client` | 토큰 발급에 사용한 앱의 REST API 키와 Client Secret이 GitHub 및 로컬 설정과 같은지 확인 |
 | `expired_or_invalid_refresh_token` | 만료·폐기된 토큰이므로 위 절차로 새 토큰 발급 |
 
@@ -116,6 +121,7 @@ refresh token 목록은 다음처럼 JSON 배열로 입력합니다. 따옴표�
 - NEIS 요청이 실패하면 급식 조회 실패 안내를 카카오톡으로 보내고 수신자 전송을 계속 시도합니다.
 - 한 카카오 계정이 만료/실패해도 다른 계정 전송은 계속됩니다. 모든 수신자 전송이 실패하면 워크플로가 실패로 표시됩니다.
 - refresh token이 교체되면 해당 계정에 별도의 Secret 갱신 안내 메시지를 보냅니다. 새 토큰 값은 알림에 포함하지 않습니다. `get_tokens.py`로 새 토큰을 발급해 `KAKAO_REFRESH_TOKENS` Secret을 교체하세요.
+- `KAKAO_FRIEND_NICKNAMES`가 설정되어 있으면 첫 번째 계정이 조회한 친구 UUID로 가족에게 급식 메시지를 추가 전송합니다. 친구 메시지는 카카오 앱의 별도 권한과 전송 한도 적용을 받습니다.
 - Kakao REST API 키의 Client Secret 설정을 변경했다면 GitHub Secret도 함께 수정해야 합니다.
 
 ## 로컬에서 급식 메시지 실행

@@ -31,12 +31,12 @@ def index():
         "client_id": REST_API_KEY,
         "redirect_uri": REDIRECT_URI,
         "response_type": "code",
-        "scope": "talk_message",
+        "scope": "friends,talk_message",
         "state": state,
     })
     return page(
         "카카오 refresh token 발급",
-        "<p>발급받을 카카오 계정으로 로그인한 뒤 동의해 주세요. 토큰은 이 브라우저에만 표시됩니다.</p>"
+        "<p>발급받을 발신자 계정으로 로그인한 뒤 친구 목록과 메시지 전송에 동의해 주세요. 토큰은 이 브라우저에만 표시됩니다.</p>"
         f'<p><a class="button" href="{AUTH_URL}?{query}">카카오 로그인</a></p>'
         "<p>카카오 개발자 콘솔의 Redirect URI에 아래 주소를 등록해야 합니다.</p>"
         f"<p><code>{escape_html(REDIRECT_URI)}</code></p>",
