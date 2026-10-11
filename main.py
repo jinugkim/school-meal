@@ -15,8 +15,6 @@ logger = logging.getLogger(__name__)
 NEIS_URL = "https://open.neis.go.kr/hub/mealServiceDietInfo"
 KAKAO_TOKEN_URL = "https://kauth.kakao.com/oauth/token"
 KAKAO_MEMO_URL = "https://kapi.kakao.com/v2/api/talk/memo/default/send"
-KAKAO_FRIENDS_URL = "https://kapi.kakao.com/v1/api/talk/friends"
-KAKAO_FRIEND_MESSAGE_URL = "https://kapi.kakao.com/v1/api/talk/friends/message/default/send"
 
 
 def clean_dish_name(value):
@@ -151,100 +149,6 @@ def send_kakao_message(access_token, message):
         raise RuntimeError(f"카카오 메시지 전송 실패: {result}")
 
 
-def load_friend_nicknames():
-    """Load exact KakaoTalk friend nicknames used to resolve recipient UUIDs."""
-    raw = os.environ.get("KAKAO_FRIEND_NICKNAMES", "").strip()
-    if not raw:
-        return []
-    try:
-        values = json.loads(raw)
-        if isinstance(values, str):
-            values = [values]
-        if not isinstance(values, list):
-            raise ValueError
-    except (json.JSONDecodeError, ValueError):
-        values = raw.split(",")
-    nicknames = list(dict.fromkeys(str(value).strip() for value in values if str(value).strip()))
-    if len(nicknames) > 5:
-        raise ValueError("KAKAO_FRIEND_NICKNAMES는 최대 5명까지 설정할 수 있습니다.")
-    return nicknames
-
-
-def get_friend_uuids(access_token, nicknames):
-    """Resolve exact configured nicknames to UUIDs from the sender's friend list."""
-    friends = []
-    offset = 0
-    total_count = None
-    while total_count is None or offset < total_count:
-        response = requests.get(
-            KAKAO_FRIENDS_URL,
-            headers={"Authorization": f"Bearer {access_token}"},
-            params={"limit": 100, "offset": offset, "order": "asc"},
-            timeout=20,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        page = payload.get("elements", [])
-        friends.extend(page)
-        total_count = int(payload.get("total_count", len(friends)))
-        if not page:
-            break
-        offset += len(page)
-
-    uuids = []
-    for nickname in nicknames:
-        matches = [friend for friend in friends if friend.get("profile_nickname") == nickname]
-        if len(matches) != 1 or not matches[0].get("uuid"):
-            raise RuntimeError(
-                f"카카오 친구 목록에서 닉네임 '{nickname}'을(를) 하나로 확인하지 못했습니다. "
-                "친구 목록 제공 동의, 앱 멤버 연결, 정확한 닉네임을 확인하세요."
-            )
-        uuids.append(matches[0]["uuid"])
-    return uuids
-
-
-def send_kakao_friend_message(access_token, message, receiver_uuids):
-    """Send one default text template to up to five friends."""
-    template = {
-        "object_type": "text",
-        "text": message[:200],
-        "link": {"web_url": "https://open.neis.go.kr", "mobile_web_url": "https://open.neis.go.kr"},
-        "button_title": "나이스 급식 정보",
-    }
-    response = requests.post(
-        KAKAO_FRIEND_MESSAGE_URL,
-        headers={"Authorization": f"Bearer {access_token}"},
-        data={
-            "receiver_uuids": json.dumps(receiver_uuids, ensure_ascii=False),
-            "template_object": json.dumps(template, ensure_ascii=False),
-        },
-        timeout=20,
-    )
-    try:
-        response.raise_for_status()
-    except requests.HTTPError as exc:
-        try:
-            error_info = response.json()
-        except ValueError:
-            error_info = {}
-        details = [str(value) for value in (error_info.get("code", ""), error_info.get("msg", "")) if value != ""]
-        scopes = error_info.get("required_scopes", [])
-        if scopes:
-            details.append(f"필요 동의항목: {', '.join(scopes)}")
-        if details:
-            raise RuntimeError(f"카카오 친구 메시지 전송 실패 ({response.status_code}): {'; '.join(details)}") from exc
-        raise
-    result = response.json()
-    failures = result.get("failure_info", [])
-    if failures:
-        details = "; ".join(f"{item.get('code')}: {item.get('msg')}" for item in failures)
-        raise RuntimeError(f"일부 카카오 친구에게 메시지를 보내지 못했습니다: {details}")
-    successful = set(result.get("successful_receiver_uuids", []))
-    missing = set(receiver_uuids) - successful
-    if "successful_receiver_uuids" in result and missing:
-        raise RuntimeError(f"카카오 친구 메시지 응답에서 일부 수신자 전송 성공을 확인하지 못했습니다 ({len(missing)}명).")
-
-
 def load_refresh_tokens():
     raw = required_env("KAKAO_REFRESH_TOKENS")
     try:
@@ -324,9 +228,6 @@ def main():
 
     kakao_key = required_env("KAKAO_REST_API_KEY")
     tokens = load_refresh_tokens()
-    friend_nicknames = load_friend_nicknames()
-    if not friend_nicknames:
-        logger.info("KAKAO_FRIEND_NICKNAMES 미설정: 가족 친구 메시지를 건너뜁니다.")
     client_secret = os.environ.get("KAKAO_CLIENT_SECRET", "").strip()
 
     failures = 0
@@ -360,18 +261,6 @@ def main():
             except Exception:
                 recipient_failed = True
                 logger.exception("수신자 %d/%d 토큰 갱신 안내 전송 실패.", index, len(tokens))
-
-        # The first configured account is the sender for family friend messages.
-        # Keep the existing self-chat delivery to every configured account.
-        if index == 1 and friend_nicknames:
-            try:
-                friend_uuids = get_friend_uuids(access_token, friend_nicknames)
-                for message_index, message in enumerate(messages, start=1):
-                    send_kakao_friend_message(access_token, message, friend_uuids)
-                    logger.info("가족 친구 %d명에게 메시지 %d/%d 전송 완료", len(friend_uuids), message_index, len(messages))
-            except Exception:
-                recipient_failed = True
-                logger.exception("가족 친구 메시지 전송에 실패했습니다.")
 
         if recipient_failed:
             failures += 1
