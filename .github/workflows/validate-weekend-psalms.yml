@@ -1,0 +1,35 @@
+name: Validate weekend Psalms
+
+on:
+  push:
+    paths:
+      - main.py
+      - weekend_psalms.md
+      - requirements.txt
+      - .github/workflows/validate-weekend-psalms.yml
+  pull_request:
+    paths:
+      - main.py
+      - weekend_psalms.md
+      - requirements.txt
+      - .github/workflows/validate-weekend-psalms.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Validate Psalm list
+        run: python main.py --validate-weekend-psalms

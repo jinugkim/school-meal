@@ -134,6 +134,17 @@ def meals_for_scheduled_day(meals, meal_day):
     return [meal for meal in meals if meal[0] != "석식" or dinner_day]
 
 
+def school_day_skip_reason(meal_day):
+    """Return why meals are not expected on weekends or Korean public holidays."""
+    if meal_day.weekday() >= 5:
+        return "주말"
+    korea_holidays = holidays.country_holidays(
+        "KR", years=[meal_day.year], categories=holidays.PUBLIC
+    )
+    holiday_name = korea_holidays.get(meal_day)
+    return f"한국 공휴일: {holiday_name}" if holiday_name else None
+
+
 def get_access_token(refresh_token, rest_api_key, client_secret="", secret_name="KAKAO_REFRESH_TOKENS"):
     data = {"grant_type": "refresh_token", "client_id": rest_api_key, "refresh_token": refresh_token}
     if client_secret:
@@ -241,12 +252,19 @@ def load_weekend_psalm_weeks():
     """Read the curated Saturday/Sunday messages from the human-readable list."""
     path = os.path.join(os.path.dirname(__file__), "weekend_psalms.md")
     row_pattern = re.compile(r"^\|\s*(\d+)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|$")
-    message_pattern = re.compile(r"^(.*?)\s+—\s+(Psalm\s+\d+:\d+(?:[–-]\d+)?)\s+\(WEB Updated\)$")
+    message_pattern = re.compile(r"^(.+?)\s+—\s+(Psalm\s+\d+:\d+(?:[–-]\d+)?)\s+\(WEB Updated\)$")
     weeks = []
     with open(path, encoding="utf-8") as source:
         for line in source:
-            row = row_pattern.match(line.rstrip("\n"))
+            raw_line = line.rstrip("\n")
+            row = row_pattern.match(raw_line)
             if not row:
+                stripped_line = raw_line.strip()
+                if stripped_line.startswith("|") and not (
+                    stripped_line.lower().startswith("| week ")
+                    or re.match(r"^\|\s*:?-{3,}", stripped_line)
+                ):
+                    raise ValueError(f"주말 시편 목록 표 형식이 잘못되었습니다: {stripped_line}")
                 continue
             week_number = int(row.group(1))
             if week_number != len(weeks) + 1:
@@ -264,6 +282,18 @@ def load_weekend_psalm_weeks():
     if len(weeks) != 55:
         raise ValueError(f"주말 시편 목록은 55주가 필요하지만 {len(weeks)}주만 있습니다.")
     return weeks
+
+
+def validate_weekend_psalm_list():
+    """Validate all curated Psalm rows and report a concise success message."""
+    weeks = load_weekend_psalm_weeks()
+    message_count = sum(len(week) for week in weeks)
+    logger.info(
+        "시편 목록 검증 완료: %d주, %d개 메시지, 모두 200자 이내",
+        len(weeks),
+        message_count,
+    )
+    return 0
 
 
 def send_weekend_psalm():
@@ -394,6 +424,12 @@ def main():
         meal_day.strftime("%Y-%m-%d"),
     )
 
+    skip_reason = school_day_skip_reason(meal_day)
+    if skip_reason:
+        logger.info("대상일 %s은(는) %s이므로 급식 조회와 발송을 건너뜁니다.", meal_day, skip_reason)
+        log_run_summary(meal_day, "급식 정보 조회 생략", [], skip_reason)
+        return 0
+
     # Query and report NEIS before checking Kakao settings so the data source
     # can be verified independently during initial setup.
     technical_alerts = []
@@ -506,6 +542,8 @@ def main():
 
 if __name__ == "__main__":
     try:
+        if "--validate-weekend-psalms" in sys.argv[1:]:
+            sys.exit(validate_weekend_psalm_list())
         if "--send-weekend-psalm" in sys.argv[1:]:
             sys.exit(send_weekend_psalm())
         if "--check-neis" in sys.argv[1:]:
