@@ -2,8 +2,6 @@ name: Daily school meal
 
 on:
   schedule:
-    # 21:00 KST daily: check tomorrow's menu (12:00 UTC)
-    - cron: "0 12 * * *"
     # 06:25 KST, Monday to Friday (21:25 UTC, Sunday to Thursday)
     - cron: "25 21 * * 0-4"
     # 09:00 KST on Saturdays and Sundays (00:00 UTC)
@@ -31,7 +29,6 @@ jobs:
       KAKAO_REFRESH_TOKEN_ME: ${{ secrets.KAKAO_REFRESH_TOKEN_ME }}
       KAKAO_REFRESH_TOKEN_WIFE: ${{ secrets.KAKAO_REFRESH_TOKEN_WIFE }}
       KAKAO_REFRESH_TOKEN_DAUGHTER: ${{ secrets.KAKAO_REFRESH_TOKEN_DAUGHTER }}
-      MEAL_DAY_OFFSET: ${{ github.event.schedule == '0 12 * * *' && '1' || '0' }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
