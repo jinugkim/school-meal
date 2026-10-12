@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import requests
+import holidays
 
 logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO").upper(), format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -82,6 +83,20 @@ def format_meal_message(date_label, day_label, meal):
         return message
     # Kakao's text template is limited to 200 characters.
     return message[:199] + "…"
+
+
+def meals_for_scheduled_day(meals, meal_day):
+    """Keep dinner only on non-holiday Tuesdays and Thursdays."""
+    korea_holidays = holidays.country_holidays(
+        "KR", years=[meal_day.year], categories=holidays.PUBLIC
+    )
+    holiday_name = korea_holidays.get(meal_day)
+    dinner_day = meal_day.weekday() in (1, 3) and not holiday_name
+    if holiday_name:
+        logger.info("%s은(는) 한국 공휴일(%s)이라 석식 발송을 건너뜁니다.", meal_day.strftime("%Y-%m-%d"), holiday_name)
+    elif meal_day.weekday() not in (1, 3):
+        logger.info("화요일·목요일이 아니므로 석식 발송을 건너뜁니다.")
+    return [meal for meal in meals if meal[0] != "석식" or dinner_day]
 
 
 def get_access_token(refresh_token, rest_api_key, client_secret="", secret_name="KAKAO_REFRESH_TOKENS"):
@@ -224,6 +239,10 @@ def main():
     try:
         meals = get_today_meal(api_key, office_code, school_code, meal_date)
         if meals:
+            meals = meals_for_scheduled_day(meals, meal_day)
+            if not meals:
+                logger.info("발송 대상 급식이 없어 카카오 메시지를 보내지 않습니다.")
+                return 0
             logger.info("NEIS 급식 조회 완료 (%d개 식사 구분):", len(meals))
             for name, dishes, calories in meals:
                 logger.info("%s: %s", name, " / ".join(dishes))

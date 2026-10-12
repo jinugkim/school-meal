@@ -4,8 +4,8 @@ on:
   schedule:
     # 21:00 KST daily: check tomorrow's menu (12:00 UTC)
     - cron: "0 12 * * *"
-    # 07:20 KST, Monday to Friday (22:20 UTC, Sunday to Thursday)
-    - cron: "20 22 * * 0-4"
+    # 06:25 KST, Monday to Friday (21:25 UTC, Sunday to Thursday)
+    - cron: "25 21 * * 0-4"
   workflow_dispatch:
 
 permissions:
