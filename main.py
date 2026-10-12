@@ -84,7 +84,7 @@ def format_meal_message(date_label, day_label, meal):
     return message[:199] + "…"
 
 
-def get_access_token(refresh_token, rest_api_key, client_secret=""):
+def get_access_token(refresh_token, rest_api_key, client_secret="", secret_name="KAKAO_REFRESH_TOKENS"):
     data = {"grant_type": "refresh_token", "client_id": rest_api_key, "refresh_token": refresh_token}
     if client_secret:
         data["client_secret"] = client_secret
@@ -111,7 +111,7 @@ def get_access_token(refresh_token, rest_api_key, client_secret=""):
     # Kakao may rotate refresh tokens. The new value must be saved back to the repository secret.
     refresh_token_rotated = bool(payload.get("refresh_token"))
     if refresh_token_rotated:
-        logger.warning("Kakao refresh token rotated; update KAKAO_REFRESH_TOKENS secret with the new value.")
+        logger.warning("Kakao refresh token rotated; update %s secret with the new value.", secret_name)
     return token, refresh_token_rotated
 
 
@@ -150,7 +150,23 @@ def send_kakao_message(access_token, message):
 
 
 def load_refresh_tokens():
-    raw = required_env("KAKAO_REFRESH_TOKENS")
+    individual_secrets = [
+        ("본인", "KAKAO_REFRESH_TOKEN_ME"),
+        ("배우자", "KAKAO_REFRESH_TOKEN_WIFE"),
+        ("딸", "KAKAO_REFRESH_TOKEN_DAUGHTER"),
+    ]
+    recipients = [
+        (label, secret_name, os.environ.get(secret_name, "").strip())
+        for label, secret_name in individual_secrets
+        if os.environ.get(secret_name, "").strip()
+    ]
+    if recipients:
+        return recipients
+
+    raw = os.environ.get("KAKAO_REFRESH_TOKENS", "").strip()
+    if not raw:
+        expected = ", ".join(secret_name for _, secret_name in individual_secrets)
+        raise ValueError(f"가족별 Kakao refresh token Secret을 설정하세요: {expected}")
     try:
         values = json.loads(raw)
         if isinstance(values, str):
@@ -162,7 +178,8 @@ def load_refresh_tokens():
     tokens = [str(token).strip() for token in values if str(token).strip()]
     if not tokens:
         raise ValueError("KAKAO_REFRESH_TOKENS에 유효한 토큰이 없습니다.")
-    return tokens
+    logger.warning("KAKAO_REFRESH_TOKENS 배열 사용 중입니다. 가족별 Secret으로 옮기면 갱신이 더 간단합니다.")
+    return [(f"계정 {index}", "KAKAO_REFRESH_TOKENS", token) for index, token in enumerate(tokens, start=1)]
 
 
 def check_neis():
@@ -227,28 +244,30 @@ def main():
         messages = [f"🍚 {date_label} 급식 정보를 가져오지 못했습니다. 잠시 후 NEIS 서비스 상태를 확인해 주세요."]
 
     kakao_key = required_env("KAKAO_REST_API_KEY")
-    tokens = load_refresh_tokens()
+    recipients = load_refresh_tokens()
     client_secret = os.environ.get("KAKAO_CLIENT_SECRET", "").strip()
 
     failures = 0
-    for index, refresh_token in enumerate(tokens, start=1):
+    for index, (recipient_name, secret_name, refresh_token) in enumerate(recipients, start=1):
         try:
-            access_token, refresh_token_rotated = get_access_token(refresh_token, kakao_key, client_secret)
+            access_token, refresh_token_rotated = get_access_token(
+                refresh_token, kakao_key, client_secret, secret_name
+            )
         except Exception:
             failures += 1
-            logger.exception("수신자 %d/%d 토큰 갱신 실패; 다음 계정을 계속 처리합니다.", index, len(tokens))
+            logger.exception("수신자 %s (%d/%d) 토큰 갱신 실패; 다음 계정을 계속 처리합니다.", recipient_name, index, len(recipients))
             continue
 
         recipient_failed = False
         for message_index, message in enumerate(messages, start=1):
             try:
                 send_kakao_message(access_token, message)
-                logger.info("수신자 %d/%d 메시지 %d/%d 전송 완료", index, len(tokens), message_index, len(messages))
+                logger.info("수신자 %s (%d/%d) 메시지 %d/%d 전송 완료", recipient_name, index, len(recipients), message_index, len(messages))
             except Exception:
                 recipient_failed = True
                 logger.exception(
-                    "수신자 %d/%d 메시지 %d/%d 전송 실패; 다음 메시지를 계속 처리합니다.",
-                    index, len(tokens), message_index, len(messages),
+                    "수신자 %s (%d/%d) 메시지 %d/%d 전송 실패; 다음 메시지를 계속 처리합니다.",
+                    recipient_name, index, len(recipients), message_index, len(messages),
                 )
 
         if refresh_token_rotated:
@@ -256,18 +275,18 @@ def main():
                 send_kakao_message(
                     access_token,
                     "⚠️ 카카오 인증 정보 갱신이 필요합니다. 새 refresh token을 발급해 "
-                    "GitHub Secret KAKAO_REFRESH_TOKENS를 교체해 주세요.",
+                    f"GitHub Secret {secret_name}을(를) 교체해 주세요.",
                 )
             except Exception:
                 recipient_failed = True
-                logger.exception("수신자 %d/%d 토큰 갱신 안내 전송 실패.", index, len(tokens))
+                logger.exception("수신자 %s (%d/%d) 토큰 갱신 안내 전송 실패.", recipient_name, index, len(recipients))
 
         if recipient_failed:
             failures += 1
-    if failures == len(tokens):
+    if failures == len(recipients):
         return 1
     if failures:
-        logger.warning("%d/%d 계정에서 전송이 실패했습니다.", failures, len(tokens))
+        logger.warning("%d/%d 계정에서 전송이 실패했습니다.", failures, len(recipients))
     return 0
 
 

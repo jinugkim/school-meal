@@ -77,7 +77,9 @@ def oauth_callback():
         return page("토큰 발급 실패", "<p>응답에 refresh token이 없습니다. 카카오 응답과 앱 설정을 확인하세요.</p>"), 502
     return page(
         "발급 완료",
-        "<p>아래 값을 복사해 GitHub Secret <code>KAKAO_REFRESH_TOKENS</code>에 안전하게 저장하세요.</p>"
+        "<p>아래 토큰을 로그인한 계정에 해당하는 GitHub Secret에 안전하게 저장하세요. "
+        "예: 본인 계정은 <code>KAKAO_REFRESH_TOKEN_ME</code>, 배우자는 "
+        "<code>KAKAO_REFRESH_TOKEN_WIFE</code>, 딸은 <code>KAKAO_REFRESH_TOKEN_DAUGHTER</code>.</p>"
         f'<textarea readonly rows="5" onclick="this.select()">{escape_html(refresh_token)}</textarea>'
         "<p>토큰은 비밀번호와 같습니다. 저장 후 이 페이지를 닫고 공유하거나 저장소에 커밋하지 마세요.</p>",
     )

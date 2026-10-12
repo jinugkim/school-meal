@@ -67,15 +67,11 @@ python get_tokens.py
 | `SCHOOL_CODE` | 학교 표준학교코드 |
 | `KAKAO_REST_API_KEY` | Kakao 앱 REST API 키 |
 | `KAKAO_CLIENT_SECRET` | Client Secret이 켜져 있으면 필수. 꺼져 있으면 빈 값 또는 Secret 생략 가능 |
-| `KAKAO_REFRESH_TOKENS` | 가족별 refresh token 목록(JSON 배열 권장) |
+| `KAKAO_REFRESH_TOKEN_ME` | 본인 카카오 계정의 refresh token |
+| `KAKAO_REFRESH_TOKEN_WIFE` | 배우자 카카오 계정의 refresh token |
+| `KAKAO_REFRESH_TOKEN_DAUGHTER` | 딸 카카오 계정의 refresh token |
 
-refresh token 목록은 다음처럼 JSON 배열로 입력합니다. 따옴표는 JSON 문법에 맞게 포함합니다.
-
-```json
-["첫번째_계정_refresh_token", "두번째_계정_refresh_token"]
-```
-
-한 계정만 등록할 때도 배열 형식을 사용할 수 있습니다. 코드의 기본 설정은 모든 토큰을 같은 학교 급식 메시지 수신 대상으로 취급합니다.
+각 Secret에는 해당 카카오 계정에서 발급한 refresh token 하나만 입력합니다. Secret이 설정된 계정마다 해당 계정의 ‘나와의 채팅’으로 급식 메시지가 따로 전송됩니다. 계정별 발급 방법은 `get_tokens.py` 절차를 사용하고, 발급한 토큰은 로그인한 계정에 맞는 Secret에 넣습니다. 예전 `KAKAO_REFRESH_TOKENS` 배열은 개별 Secret을 하나도 설정하지 않은 경우에만 호환용으로 사용됩니다. 전환할 때는 가족별 Secret을 모두 입력하면 배열은 무시되어 중복 발송되지 않습니다.
 
 ## Refresh token 갱신
 
@@ -94,7 +90,7 @@ refresh token 목록은 다음처럼 JSON 배열로 입력합니다. 따옴표�
 
    Client Secret이 꺼져 있다면 `export KAKAO_CLIENT_SECRET=...` 대신 `unset KAKAO_CLIENT_SECRET`을 실행합니다.
 2. `http://127.0.0.1:5000`에서 해당 카카오 계정으로 로그인하고 동의한 뒤 새 refresh token을 복사합니다.
-3. GitHub **Settings → Secrets and variables → Actions → `KAKAO_REFRESH_TOKENS`**를 새 토큰으로 교체합니다. 여러 계정이면 해당 토큰만 바꾸고 나머지는 유지합니다. 새 토큰은 채팅이나 코드에 붙여넣지 않습니다.
+3. GitHub **Settings → Secrets and variables → Actions**에서 갱신 안내에 표시된 해당 계정 Secret(예: `KAKAO_REFRESH_TOKEN_WIFE`)만 새 토큰으로 교체합니다. 토큰은 채팅이나 코드에 붙여넣지 않습니다.
 4. Actions에서 워크플로를 수동 실행해 전송을 확인하고, 로컬 서버는 `Ctrl+C`로 종료합니다.
 
 갱신 때 자주 발생하는 설정 오류:
@@ -115,12 +111,12 @@ refresh token 목록은 다음처럼 JSON 배열로 입력합니다. 따옴표�
 - NEIS가 제공하는 식사 구분(예: 중식, 석식)마다 별도의 카카오 메시지를 보냅니다. 카카오 텍스트 템플릿의 200자 제한을 넘으면 메뉴 끝을 줄여 전송합니다.
 - NEIS 요청이 실패하면 급식 조회 실패 안내를 카카오톡으로 보내고 수신자 전송을 계속 시도합니다.
 - 한 카카오 계정이 만료/실패해도 다른 계정 전송은 계속됩니다. 모든 수신자 전송이 실패하면 워크플로가 실패로 표시됩니다.
-- refresh token이 교체되면 해당 계정에 별도의 Secret 갱신 안내 메시지를 보냅니다. 새 토큰 값은 알림에 포함하지 않습니다. `get_tokens.py`로 새 토큰을 발급해 `KAKAO_REFRESH_TOKENS` Secret을 교체하세요.
+- refresh token이 교체되면 해당 계정에 별도의 Secret 갱신 안내 메시지를 보냅니다. 새 토큰 값은 알림에 포함하지 않습니다. 메시지에 표시된 해당 계정 Secret만 교체하세요.
 - Kakao REST API 키의 Client Secret 설정을 변경했다면 GitHub Secret도 함께 수정해야 합니다.
 
 ## 로컬에서 급식 메시지 실행
 
-필요한 환경 변수를 설정한 뒤 `python main.py`를 실행할 수 있습니다. 필수 값은 위 GitHub Secrets와 동일합니다. `KAKAO_REFRESH_TOKENS`는 JSON 배열 또는 쉼표로 구분한 값으로 읽습니다.
+필요한 환경 변수를 설정한 뒤 `python main.py`를 실행할 수 있습니다. Kakao refresh token은 위 가족별 Secret과 같은 환경 변수 이름을 사용합니다. 기존 배열 설정은 개별 Secret이 하나도 없을 때만 호환용으로 읽습니다.
 
 카카오 연동 전에 NEIS 조회만 확인하려면 `NEIS_API_KEY`, `OFFICE_CODE`, `SCHOOL_CODE`를 설정한 뒤 `python main.py --check-neis`를 실행합니다. 이 모드는 급식 메뉴와 열량을 출력하고 카카오 설정은 확인하지 않습니다. 일반 실행에서는 NEIS 조회 결과를 먼저 로그에 표시한 뒤 Kakao 환경 변수를 확인합니다.
 

@@ -26,6 +26,9 @@ jobs:
       KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
       KAKAO_CLIENT_SECRET: ${{ secrets.KAKAO_CLIENT_SECRET }}
       KAKAO_REFRESH_TOKENS: ${{ secrets.KAKAO_REFRESH_TOKENS }}
+      KAKAO_REFRESH_TOKEN_ME: ${{ secrets.KAKAO_REFRESH_TOKEN_ME }}
+      KAKAO_REFRESH_TOKEN_WIFE: ${{ secrets.KAKAO_REFRESH_TOKEN_WIFE }}
+      KAKAO_REFRESH_TOKEN_DAUGHTER: ${{ secrets.KAKAO_REFRESH_TOKEN_DAUGHTER }}
       MEAL_DAY_OFFSET: ${{ github.event.schedule == '0 12 * * *' && '1' || '0' }}
     steps:
       - name: Check out repository
