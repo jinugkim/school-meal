@@ -233,9 +233,17 @@ def main():
         meal_day_label = "월요일"
     else:
         meal_day_label = "내일" if day_offset == 1 else "오늘"
+    logger.info(
+        "실행 시각(KST): %s; 실행 유형: %s; 조회 대상일: %s",
+        today.strftime("%Y-%m-%d %H:%M:%S %Z"),
+        "예약" if is_scheduled else "수동/로컬",
+        meal_day.strftime("%Y-%m-%d"),
+    )
 
     # Query and report NEIS before checking Kakao settings so the data source
     # can be verified independently during initial setup.
+    technical_alerts = []
+    neis_failed = False
     try:
         meals = get_today_meal(api_key, office_code, school_code, meal_date)
         if meals:
@@ -257,24 +265,30 @@ def main():
             if is_scheduled:
                 logger.info("예약 실행이며 급식 정보가 없어 카카오 메시지 전송을 건너뜁니다.")
                 return 0
-            messages = [f"🍚 테스트 메시지입니다. {date_label} 등록된 급식 정보가 없습니다."]
+            technical_alerts.append(f"수동 실행 확인: {date_label} NEIS에 등록된 급식 정보가 없습니다.")
+            messages = []
     except Exception:
         logger.exception("NEIS 급식 조회 실패")
-        messages = [f"🍚 {date_label} 급식 정보를 가져오지 못했습니다. 잠시 후 NEIS 서비스 상태를 확인해 주세요."]
+        technical_alerts.append(f"NEIS 급식 조회에 실패했습니다 ({date_label}). GitHub Actions 로그를 확인해 주세요.")
+        messages = []
+        neis_failed = True
 
     kakao_key = required_env("KAKAO_REST_API_KEY")
     recipients = load_refresh_tokens()
     client_secret = os.environ.get("KAKAO_CLIENT_SECRET", "").strip()
 
     failures = 0
+    account_access_tokens = {}
     for index, (recipient_name, secret_name, refresh_token) in enumerate(recipients, start=1):
         try:
             access_token, refresh_token_rotated = get_access_token(
                 refresh_token, kakao_key, client_secret, secret_name
             )
+            account_access_tokens[recipient_name] = access_token
         except Exception:
             failures += 1
             logger.exception("수신자 %s (%d/%d) 토큰 갱신 실패; 다음 계정을 계속 처리합니다.", recipient_name, index, len(recipients))
+            technical_alerts.append(f"{recipient_name} 계정의 카카오 토큰 갱신에 실패했습니다. {secret_name}과 Actions 로그를 확인해 주세요.")
             continue
 
         recipient_failed = False
@@ -288,25 +302,33 @@ def main():
                     "수신자 %s (%d/%d) 메시지 %d/%d 전송 실패; 다음 메시지를 계속 처리합니다.",
                     recipient_name, index, len(recipients), message_index, len(messages),
                 )
+                technical_alerts.append(f"{recipient_name} 계정으로 급식 메시지를 보내지 못했습니다. Actions 로그를 확인해 주세요.")
 
         if refresh_token_rotated:
-            try:
-                send_kakao_message(
-                    access_token,
-                    "⚠️ 카카오 인증 정보 갱신이 필요합니다. 새 refresh token을 발급해 "
-                    f"GitHub Secret {secret_name}을(를) 교체해 주세요.",
-                )
-            except Exception:
-                recipient_failed = True
-                logger.exception("수신자 %s (%d/%d) 토큰 갱신 안내 전송 실패.", recipient_name, index, len(recipients))
+            technical_alerts.append(
+                f"{recipient_name} 계정 refresh token이 교체됐습니다. 새 토큰을 발급해 GitHub Secret {secret_name}을 갱신해 주세요."
+            )
 
         if recipient_failed:
             failures += 1
-    if failures == len(recipients):
-        return 1
     if failures:
         logger.warning("%d/%d 계정에서 전송이 실패했습니다.", failures, len(recipients))
-    return 0
+
+    # Operational and credential notices go only to the owner's Kakao account.
+    owner_access_token = account_access_tokens.get("본인")
+    if technical_alerts and owner_access_token:
+        for alert in dict.fromkeys(technical_alerts):
+            try:
+                send_kakao_message(owner_access_token, f"⚠️ 급식 알림 시스템 안내\n{alert}")
+                logger.info("운영 안내를 본인 계정으로 전송했습니다.")
+            except Exception:
+                failures += 1
+                logger.exception("본인 계정으로 운영 안내를 전송하지 못했습니다.")
+    elif technical_alerts:
+        logger.warning("본인 계정 Secret이 없어 기술 안내를 카카오로 보내지 못했습니다.")
+        failures += 1
+
+    return 1 if failures or neis_failed else 0
 
 
 if __name__ == "__main__":
