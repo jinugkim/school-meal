@@ -19,6 +19,40 @@ KAKAO_MEMO_URL = "https://kapi.kakao.com/v2/api/talk/memo/default/send"
 WEEKEND_PSALM_START = date(2026, 10, 17)
 
 
+def log_run_summary(target_date, content_label, recipient_results, no_send_reason=None):
+    """Print a compact, consistently formatted summary for GitHub Actions."""
+    result_label = f"발송 안 함 ({no_send_reason})" if no_send_reason else "발송 시도"
+    logger.info("========== 실행 결과 요약 ==========")
+    logger.info("대상 날짜: %s (KST)", target_date.strftime("%Y-%m-%d"))
+    logger.info("내용: %s", content_label)
+    if no_send_reason:
+        logger.info("발송 결과: %s", result_label)
+    elif not recipient_results:
+        logger.info("발송 결과: 수신자 없음")
+    if recipient_results:
+        for recipient_name, result in recipient_results:
+            logger.info("수신자 %s: %s", recipient_name, result)
+    logger.info("====================================")
+
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary_path:
+        lines = [
+            "## 실행 결과 요약",
+            "",
+            f"- 대상 날짜(KST): {target_date.strftime('%Y-%m-%d')}",
+            f"- 내용: {content_label}",
+            f"- 발송: {result_label}",
+            "",
+        ]
+        if recipient_results:
+            lines.extend(["| 수신자 | 결과 |", "| --- | --- |"])
+            lines.extend(f"| {name} | {result} |" for name, result in recipient_results)
+        else:
+            lines.append("수신자별 발송 없음")
+        with open(summary_path, "a", encoding="utf-8") as summary_file:
+            summary_file.write("\n".join(lines) + "\n")
+
+
 def clean_dish_name(value):
     """Turn NEIS HTML breaks into lines and remove allergy marker numbers."""
     value = re.sub(r"<br\s*/?>", "\n", str(value), flags=re.IGNORECASE)
@@ -261,6 +295,7 @@ def send_weekend_psalm():
     technical_alerts = []
     failures = 0
     owner_access_token = None
+    recipient_results = []
     for index, (recipient_name, secret_name, refresh_token) in enumerate(recipients, start=1):
         try:
             access_token, refresh_token_rotated = get_access_token(
@@ -272,6 +307,7 @@ def send_weekend_psalm():
             technical_alerts.append(
                 f"{recipient_name} 계정의 주말 시편 토큰 갱신에 실패했습니다. {secret_name}과 Actions 로그를 확인해 주세요."
             )
+            recipient_results.append((recipient_name, "실패 (토큰 갱신)"))
             continue
 
         if recipient_name == "본인" or secret_name == "KAKAO_REFRESH_TOKEN_ME":
@@ -284,12 +320,14 @@ def send_weekend_psalm():
                 button_title="Psalms",
             )
             logger.info("수신자 %s (%d/%d) 주말 시편 전송 완료", recipient_name, index, len(recipients))
+            recipient_results.append((recipient_name, "성공"))
         except Exception:
             failures += 1
             logger.exception("수신자 %s (%d/%d) 주말 시편 전송에 실패했습니다.", recipient_name, index, len(recipients))
             technical_alerts.append(
                 f"{recipient_name} 계정으로 주말 시편을 보내지 못했습니다. Actions 로그를 확인해 주세요."
             )
+            recipient_results.append((recipient_name, "실패 (메시지 전송)"))
 
         if refresh_token_rotated:
             technical_alerts.append(
@@ -309,6 +347,7 @@ def send_weekend_psalm():
             logger.warning("본인 계정 Secret이 없어 기술 안내를 카카오로 보내지 못했습니다.")
             failures += 1
 
+    log_run_summary(today, f"주말 시편 {week_number}주차 ({'토요일' if message_index == 0 else '일요일'})", recipient_results)
     return 1 if failures else 0
 
 
@@ -365,6 +404,7 @@ def main():
             meals = meals_for_scheduled_day(meals, meal_day)
             if not meals:
                 logger.info("발송 대상 급식이 없어 카카오 메시지를 보내지 않습니다.")
+                log_run_summary(meal_day, "급식 없음", [], "요일·공휴일 기준으로 발송 대상 식사가 없음")
                 return 0
             logger.info("NEIS 급식 조회 완료 (%d개 식사 구분):", len(meals))
             for name, dishes, calories in meals:
@@ -379,6 +419,7 @@ def main():
             logger.info("NEIS 조회 완료: %s 등록된 급식 정보가 없습니다.", date_label)
             if is_scheduled:
                 logger.info("예약 실행이며 급식 정보가 없어 카카오 메시지 전송을 건너뜁니다.")
+                log_run_summary(meal_day, "급식 정보 없음", [], "NEIS에 메뉴가 등록되지 않음")
                 return 0
             technical_alerts.append(f"수동 실행 확인: {date_label} NEIS에 등록된 급식 정보가 없습니다.")
             messages = []
@@ -394,6 +435,8 @@ def main():
 
     failures = 0
     account_access_tokens = {}
+    meal_names = [meal[0] for meal in meals]
+    recipient_results = []
     for index, (recipient_name, secret_name, refresh_token) in enumerate(recipients, start=1):
         try:
             access_token, refresh_token_rotated = get_access_token(
@@ -404,13 +447,16 @@ def main():
             failures += 1
             logger.exception("수신자 %s (%d/%d) 토큰 갱신 실패; 다음 계정을 계속 처리합니다.", recipient_name, index, len(recipients))
             technical_alerts.append(f"{recipient_name} 계정의 카카오 토큰 갱신에 실패했습니다. {secret_name}과 Actions 로그를 확인해 주세요.")
+            recipient_results.append((recipient_name, "실패 (토큰 갱신)"))
             continue
 
         recipient_failed = False
+        meal_results = []
         for message_index, message in enumerate(messages, start=1):
             try:
                 send_kakao_message(access_token, message)
                 logger.info("수신자 %s (%d/%d) 메시지 %d/%d 전송 완료", recipient_name, index, len(recipients), message_index, len(messages))
+                meal_results.append(f"{meal_names[message_index - 1]} 성공")
             except Exception:
                 recipient_failed = True
                 logger.exception(
@@ -418,6 +464,7 @@ def main():
                     recipient_name, index, len(recipients), message_index, len(messages),
                 )
                 technical_alerts.append(f"{recipient_name} 계정으로 급식 메시지를 보내지 못했습니다. Actions 로그를 확인해 주세요.")
+                meal_results.append(f"{meal_names[message_index - 1]} 실패")
 
         if refresh_token_rotated:
             technical_alerts.append(
@@ -426,6 +473,7 @@ def main():
 
         if recipient_failed:
             failures += 1
+        recipient_results.append((recipient_name, ", ".join(meal_results) if meal_results else "급식 메시지 발송 없음"))
     if failures:
         logger.warning("%d/%d 계정에서 전송이 실패했습니다.", failures, len(recipients))
 
@@ -443,6 +491,16 @@ def main():
         logger.warning("본인 계정 Secret이 없어 기술 안내를 카카오로 보내지 못했습니다.")
         failures += 1
 
+    if meal_names:
+        summary_meals = ", ".join(meal_names)
+        no_send_reason = None
+    elif neis_failed:
+        summary_meals = "급식 정보 없음"
+        no_send_reason = "NEIS 조회 실패"
+    else:
+        summary_meals = "급식 정보 없음"
+        no_send_reason = "NEIS에 메뉴가 등록되지 않음"
+    log_run_summary(meal_day, summary_meals, recipient_results, no_send_reason)
     return 1 if failures or neis_failed else 0
 
 
