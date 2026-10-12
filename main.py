@@ -233,7 +233,7 @@ def load_weekend_psalm_weeks():
 
 
 def send_weekend_psalm():
-    """Send the scheduled weekend Psalm to the owner's Kakao account."""
+    """Send the scheduled weekend Psalm to each configured family account."""
     now = datetime.now(ZoneInfo("Asia/Seoul"))
     today = now.date()
     if today.weekday() not in (5, 6):
@@ -257,47 +257,57 @@ def send_weekend_psalm():
 
     kakao_key = required_env("KAKAO_REST_API_KEY")
     recipients = load_refresh_tokens()
-    owner = next((entry for entry in recipients if entry[1] == "KAKAO_REFRESH_TOKEN_ME"), None)
-    if owner is None:
-        raise ValueError("주말 시편 발송에는 KAKAO_REFRESH_TOKEN_ME Secret이 필요합니다.")
-    _, secret_name, refresh_token = owner
     client_secret = os.environ.get("KAKAO_CLIENT_SECRET", "").strip()
     technical_alerts = []
-    try:
-        access_token, refresh_token_rotated = get_access_token(
-            refresh_token, kakao_key, client_secret, secret_name
-        )
-    except Exception:
-        logger.exception("본인 계정의 주말 시편 발송용 토큰 갱신에 실패했습니다.")
-        return 1
-
     failures = 0
-    try:
-        send_kakao_message(
-            access_token,
-            message,
-            link_url="https://ebible.org/engwebu/",
-            button_title="Psalms",
-        )
-        logger.info("본인 계정으로 주말 시편 전송 완료")
-    except Exception:
-        failures += 1
-        logger.exception("본인 계정으로 주말 시편 전송에 실패했습니다.")
-        technical_alerts.append("주말 시편 메시지를 보내지 못했습니다. GitHub Actions 로그를 확인해 주세요.")
+    owner_access_token = None
+    for index, (recipient_name, secret_name, refresh_token) in enumerate(recipients, start=1):
+        try:
+            access_token, refresh_token_rotated = get_access_token(
+                refresh_token, kakao_key, client_secret, secret_name
+            )
+        except Exception:
+            failures += 1
+            logger.exception("%s 계정의 주말 시편 발송용 토큰 갱신에 실패했습니다.", recipient_name)
+            technical_alerts.append(
+                f"{recipient_name} 계정의 주말 시편 토큰 갱신에 실패했습니다. {secret_name}과 Actions 로그를 확인해 주세요."
+            )
+            continue
 
-    if refresh_token_rotated:
-        technical_alerts.append(
-            f"본인 계정 refresh token이 교체됐습니다. 새 토큰을 발급해 GitHub Secret {secret_name}을 갱신해 주세요."
-        )
+        if recipient_name == "본인" or secret_name == "KAKAO_REFRESH_TOKEN_ME":
+            owner_access_token = access_token
+        try:
+            send_kakao_message(
+                access_token,
+                message,
+                link_url="https://ebible.org/engwebu/",
+                button_title="Psalms",
+            )
+            logger.info("수신자 %s (%d/%d) 주말 시편 전송 완료", recipient_name, index, len(recipients))
+        except Exception:
+            failures += 1
+            logger.exception("수신자 %s (%d/%d) 주말 시편 전송에 실패했습니다.", recipient_name, index, len(recipients))
+            technical_alerts.append(
+                f"{recipient_name} 계정으로 주말 시편을 보내지 못했습니다. Actions 로그를 확인해 주세요."
+            )
+
+        if refresh_token_rotated:
+            technical_alerts.append(
+                f"{recipient_name} 계정 refresh token이 교체됐습니다. 새 토큰을 발급해 GitHub Secret {secret_name}을 갱신해 주세요."
+            )
 
     if technical_alerts:
-        for alert in dict.fromkeys(technical_alerts):
-            try:
-                send_kakao_message(access_token, f"⚠️ 급식 알림 시스템 안내\n{alert}")
-                logger.info("운영 안내를 본인 계정으로 전송했습니다.")
-            except Exception:
-                failures += 1
-                logger.exception("본인 계정으로 운영 안내를 전송하지 못했습니다.")
+        if owner_access_token:
+            for alert in dict.fromkeys(technical_alerts):
+                try:
+                    send_kakao_message(owner_access_token, f"⚠️ 급식 알림 시스템 안내\n{alert}")
+                    logger.info("운영 안내를 본인 계정으로 전송했습니다.")
+                except Exception:
+                    failures += 1
+                    logger.exception("본인 계정으로 운영 안내를 전송하지 못했습니다.")
+        else:
+            logger.warning("본인 계정 Secret이 없어 기술 안내를 카카오로 보내지 못했습니다.")
+            failures += 1
 
     return 1 if failures else 0
 
