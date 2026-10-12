@@ -5,7 +5,7 @@ import logging
 import os
 import re
 import sys
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import requests
@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 NEIS_URL = "https://open.neis.go.kr/hub/mealServiceDietInfo"
 KAKAO_TOKEN_URL = "https://kauth.kakao.com/oauth/token"
 KAKAO_MEMO_URL = "https://kapi.kakao.com/v2/api/talk/memo/default/send"
+WEEKEND_PSALM_START = date(2026, 10, 17)
 
 
 def clean_dish_name(value):
@@ -130,12 +131,17 @@ def get_access_token(refresh_token, rest_api_key, client_secret="", secret_name=
     return token, refresh_token_rotated
 
 
-def send_kakao_message(access_token, message):
+def send_kakao_message(
+    access_token,
+    message,
+    link_url="https://open.neis.go.kr",
+    button_title="나이스 급식 정보",
+):
     template = {
         "object_type": "text",
         "text": message[:200],
-        "link": {"web_url": "https://open.neis.go.kr", "mobile_web_url": "https://open.neis.go.kr"},
-        "button_title": "나이스 급식 정보",
+        "link": {"web_url": link_url, "mobile_web_url": link_url},
+        "button_title": button_title,
     }
     response = requests.post(
         KAKAO_MEMO_URL,
@@ -195,6 +201,105 @@ def load_refresh_tokens():
         raise ValueError("KAKAO_REFRESH_TOKENS에 유효한 토큰이 없습니다.")
     logger.warning("KAKAO_REFRESH_TOKENS 배열 사용 중입니다. 가족별 Secret으로 옮기면 갱신이 더 간단합니다.")
     return [(f"계정 {index}", "KAKAO_REFRESH_TOKENS", token) for index, token in enumerate(tokens, start=1)]
+
+
+def load_weekend_psalm_weeks():
+    """Read the curated Saturday/Sunday messages from the human-readable list."""
+    path = os.path.join(os.path.dirname(__file__), "weekend_psalms.md")
+    row_pattern = re.compile(r"^\|\s*(\d+)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|$")
+    message_pattern = re.compile(r"^(.*?)\s+—\s+(Psalm\s+\d+:\d+(?:[–-]\d+)?)\s+\(WEB Updated\)$")
+    weeks = []
+    with open(path, encoding="utf-8") as source:
+        for line in source:
+            row = row_pattern.match(line.rstrip("\n"))
+            if not row:
+                continue
+            week_number = int(row.group(1))
+            if week_number != len(weeks) + 1:
+                raise ValueError("주말 시편 목록의 주차 번호가 순서대로 이어지지 않습니다.")
+            messages = []
+            for cell in row.group(2, 3):
+                item = message_pattern.match(cell.strip())
+                if not item:
+                    raise ValueError(f"주말 시편 목록 {week_number}주차 형식이 잘못되었습니다.")
+                message = f"{item.group(1)}\n— {item.group(2)}"
+                if len(message) > 200:
+                    raise ValueError(f"주말 시편 목록 {week_number}주차 메시지가 200자를 넘습니다.")
+                messages.append(message)
+            weeks.append(tuple(messages))
+    if len(weeks) != 55:
+        raise ValueError(f"주말 시편 목록은 55주가 필요하지만 {len(weeks)}주만 있습니다.")
+    return weeks
+
+
+def send_weekend_psalm():
+    """Send the scheduled weekend Psalm to the owner's Kakao account."""
+    now = datetime.now(ZoneInfo("Asia/Seoul"))
+    today = now.date()
+    if today.weekday() not in (5, 6):
+        logger.info("주말 시편 예약일이 아니므로 발송하지 않습니다.")
+        return 0
+    if today < WEEKEND_PSALM_START:
+        logger.info("주말 시편 발송 시작일(%s) 전이므로 건너뜁니다.", WEEKEND_PSALM_START)
+        return 0
+
+    weeks = load_weekend_psalm_weeks()
+    week_index = ((today - WEEKEND_PSALM_START).days // 7) % len(weeks)
+    week_number = week_index + 1
+    message_index = 0 if today.weekday() == 5 else 1
+    message = weeks[week_index][message_index]
+    logger.info(
+        "주말 시편 발송: %s KST, %d주차 %s 구절",
+        now.strftime("%Y-%m-%d %H:%M:%S"),
+        week_number,
+        "토요일" if message_index == 0 else "일요일",
+    )
+
+    kakao_key = required_env("KAKAO_REST_API_KEY")
+    recipients = load_refresh_tokens()
+    owner = next((entry for entry in recipients if entry[1] == "KAKAO_REFRESH_TOKEN_ME"), None)
+    if owner is None:
+        raise ValueError("주말 시편 발송에는 KAKAO_REFRESH_TOKEN_ME Secret이 필요합니다.")
+    _, secret_name, refresh_token = owner
+    client_secret = os.environ.get("KAKAO_CLIENT_SECRET", "").strip()
+    technical_alerts = []
+    try:
+        access_token, refresh_token_rotated = get_access_token(
+            refresh_token, kakao_key, client_secret, secret_name
+        )
+    except Exception:
+        logger.exception("본인 계정의 주말 시편 발송용 토큰 갱신에 실패했습니다.")
+        return 1
+
+    failures = 0
+    try:
+        send_kakao_message(
+            access_token,
+            message,
+            link_url="https://ebible.org/engwebu/",
+            button_title="Psalms",
+        )
+        logger.info("본인 계정으로 주말 시편 전송 완료")
+    except Exception:
+        failures += 1
+        logger.exception("본인 계정으로 주말 시편 전송에 실패했습니다.")
+        technical_alerts.append("주말 시편 메시지를 보내지 못했습니다. GitHub Actions 로그를 확인해 주세요.")
+
+    if refresh_token_rotated:
+        technical_alerts.append(
+            f"본인 계정 refresh token이 교체됐습니다. 새 토큰을 발급해 GitHub Secret {secret_name}을 갱신해 주세요."
+        )
+
+    if technical_alerts:
+        for alert in dict.fromkeys(technical_alerts):
+            try:
+                send_kakao_message(access_token, f"⚠️ 급식 알림 시스템 안내\n{alert}")
+                logger.info("운영 안내를 본인 계정으로 전송했습니다.")
+            except Exception:
+                failures += 1
+                logger.exception("본인 계정으로 운영 안내를 전송하지 못했습니다.")
+
+    return 1 if failures else 0
 
 
 def check_neis():
@@ -333,6 +438,8 @@ def main():
 
 if __name__ == "__main__":
     try:
+        if "--send-weekend-psalm" in sys.argv[1:]:
+            sys.exit(send_weekend_psalm())
         if "--check-neis" in sys.argv[1:]:
             sys.exit(check_neis())
         sys.exit(main())
