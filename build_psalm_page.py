@@ -26,7 +26,7 @@ def main():
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>주말 시편 기록</title>
+  <title>금동이네 주말 시편 기록</title>
   <style>
     body { max-width: 720px; margin: 3rem auto; padding: 0 1.25rem; color: #222; font: 1rem/1.7 system-ui, sans-serif; }
     h1 { font-size: 1.75rem; }
@@ -39,7 +39,7 @@ def main():
 </head>
 <body>
   <main>
-    <h1>주말 시편 기록</h1>
+    <h1>금동이네 주말 시편 기록</h1>
     <ol>
       <!--ENTRIES-->
     </ol>
