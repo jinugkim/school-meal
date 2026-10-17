@@ -18,6 +18,7 @@ KAKAO_TOKEN_URL = "https://kauth.kakao.com/oauth/token"
 KAKAO_MEMO_URL = "https://kapi.kakao.com/v2/api/talk/memo/default/send"
 WEEKEND_PSALM_START = date(2026, 10, 17)
 WEEKEND_PSALM_HISTORY_PATH = os.path.join(os.path.dirname(__file__), "data", "weekend_psalm_history.json")
+WEEKEND_PSALM_PAGE_URL = "https://jinugkim.github.io/school-meal/"
 
 
 def record_weekend_psalm_delivery(delivery_date, message):
@@ -35,6 +36,20 @@ def record_weekend_psalm_delivery(delivery_date, message):
     with open(WEEKEND_PSALM_HISTORY_PATH, "w", encoding="utf-8") as history_file:
         json.dump(history, history_file, ensure_ascii=False, indent=2)
         history_file.write("\n")
+
+
+def weekend_psalm_message_with_history_link(message):
+    """Append the archive URL while preserving the verse reference under Kakao's limit."""
+    separator = "\n\n"
+    linked_message = f"{message}{separator}{WEEKEND_PSALM_PAGE_URL}"
+    if len(linked_message) <= 200:
+        return linked_message
+
+    verse, reference = message.rsplit("\n— ", 1)
+    suffix = f"\n— {reference}{separator}{WEEKEND_PSALM_PAGE_URL}"
+    verse_budget = 200 - len(suffix) - 1
+    shortened_verse = f"{verse[:verse_budget - 1].rstrip()}…"
+    return f"{shortened_verse}{suffix}"
 
 
 def log_run_summary(target_date, content_label, recipient_results, no_send_reason=None):
@@ -330,6 +345,7 @@ def send_weekend_psalm():
     week_number = week_index + 1
     message_index = 0 if today.weekday() == 5 else 1
     message = weeks[week_index][message_index]
+    delivery_message = weekend_psalm_message_with_history_link(message)
     logger.info(
         "주말 시편 발송: %s KST, %d주차 %s 구절",
         now.strftime("%Y-%m-%d %H:%M:%S"),
@@ -364,7 +380,7 @@ def send_weekend_psalm():
         try:
             send_kakao_message(
                 access_token,
-                message,
+                delivery_message,
                 link_url="https://ebible.org/engwebu/",
                 button_title="Psalms",
             )
