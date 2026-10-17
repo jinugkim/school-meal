@@ -2,10 +2,10 @@ name: Daily school meal
 
 on:
   schedule:
-    # 06:25 KST, Monday to Friday (21:25 UTC, Sunday to Thursday)
-    - cron: "25 21 * * 0-4"
-    # 09:00 KST on Saturdays and Sundays (00:00 UTC)
-    - cron: "0 0 * * 6,0"
+    # 02:25 KST, Monday to Friday (17:25 UTC, Sunday to Thursday)
+    - cron: "25 17 * * 0-4"
+    # 03:00 KST on Saturdays and Sundays (18:00 UTC, Friday and Saturday)
+    - cron: "0 18 * * 5,6"
   workflow_dispatch:
 
 permissions:
@@ -40,8 +40,8 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
       - name: Send weekend Psalm
-        if: github.event_name == 'schedule' && github.event.schedule == '0 0 * * 6,0'
+        if: github.event_name == 'schedule' && github.event.schedule == '0 18 * * 5,6'
         run: python main.py --send-weekend-psalm
       - name: Check and send meal
-        if: github.event_name != 'schedule' || github.event.schedule != '0 0 * * 6,0'
+        if: github.event_name != 'schedule' || github.event.schedule != '0 18 * * 5,6'
         run: python main.py
