@@ -17,6 +17,24 @@ NEIS_URL = "https://open.neis.go.kr/hub/mealServiceDietInfo"
 KAKAO_TOKEN_URL = "https://kauth.kakao.com/oauth/token"
 KAKAO_MEMO_URL = "https://kapi.kakao.com/v2/api/talk/memo/default/send"
 WEEKEND_PSALM_START = date(2026, 10, 17)
+WEEKEND_PSALM_HISTORY_PATH = os.path.join(os.path.dirname(__file__), "data", "weekend_psalm_history.json")
+
+
+def record_weekend_psalm_delivery(delivery_date, message):
+    """Persist one date/message row after at least one recipient received it."""
+    try:
+        with open(WEEKEND_PSALM_HISTORY_PATH, encoding="utf-8") as history_file:
+            history = json.load(history_file)
+    except FileNotFoundError:
+        history = []
+
+    history = [entry for entry in history if entry.get("date") != delivery_date.isoformat()]
+    history.append({"date": delivery_date.isoformat(), "message": message})
+    history.sort(key=lambda entry: entry["date"])
+    os.makedirs(os.path.dirname(WEEKEND_PSALM_HISTORY_PATH), exist_ok=True)
+    with open(WEEKEND_PSALM_HISTORY_PATH, "w", encoding="utf-8") as history_file:
+        json.dump(history, history_file, ensure_ascii=False, indent=2)
+        history_file.write("\n")
 
 
 def log_run_summary(target_date, content_label, recipient_results, no_send_reason=None):
@@ -326,6 +344,7 @@ def send_weekend_psalm():
     failures = 0
     owner_access_token = None
     recipient_results = []
+    successful_deliveries = 0
     for index, (recipient_name, secret_name, refresh_token) in enumerate(recipients, start=1):
         try:
             access_token, refresh_token_rotated = get_access_token(
@@ -351,6 +370,7 @@ def send_weekend_psalm():
             )
             logger.info("수신자 %s (%d/%d) 주말 시편 전송 완료", recipient_name, index, len(recipients))
             recipient_results.append((recipient_name, "성공"))
+            successful_deliveries += 1
         except Exception:
             failures += 1
             logger.exception("수신자 %s (%d/%d) 주말 시편 전송에 실패했습니다.", recipient_name, index, len(recipients))
@@ -363,6 +383,10 @@ def send_weekend_psalm():
             technical_alerts.append(
                 f"{recipient_name} 계정 refresh token이 교체됐습니다. 새 토큰을 발급해 GitHub Secret {secret_name}을 갱신해 주세요."
             )
+
+    if successful_deliveries:
+        record_weekend_psalm_delivery(today, message)
+        logger.info("시편 발송 기록을 날짜별 목록에 저장했습니다.")
 
     if technical_alerts:
         if owner_access_token:
