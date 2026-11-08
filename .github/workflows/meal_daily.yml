@@ -2,11 +2,22 @@ name: Daily school meal
 
 on:
   schedule:
+    # Backup cron triggers (GitHub-hosted cron may have delays, Cloud Scheduler is primary)
     # 02:25 KST, Monday to Friday (17:25 UTC, Sunday to Thursday)
     - cron: "25 17 * * 0-4"
     # 03:00 KST on Saturdays and Sundays (18:00 UTC, Friday and Saturday)
     - cron: "0 18 * * 5,6"
   workflow_dispatch:
+    inputs:
+      force_mode:
+        description: "강제 실행 모드 (기본: KST 요일 자동 판별)"
+        required: false
+        type: choice
+        default: "auto"
+        options:
+          - "auto"
+          - "meal"
+          - "psalm"
 
 permissions:
   contents: read
@@ -21,6 +32,9 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: write
+      actions: write
+    outputs:
+      is_weekend: ${{ steps.check-mode.outputs.is_weekend }}
     env:
       NEIS_API_KEY: ${{ secrets.NEIS_API_KEY }}
       OFFICE_CODE: ${{ secrets.OFFICE_CODE }}
@@ -31,22 +45,44 @@ jobs:
       KAKAO_REFRESH_TOKEN_ME: ${{ secrets.KAKAO_REFRESH_TOKEN_ME }}
       KAKAO_REFRESH_TOKEN_WIFE: ${{ secrets.KAKAO_REFRESH_TOKEN_WIFE }}
       KAKAO_REFRESH_TOKEN_DAUGHTER: ${{ secrets.KAKAO_REFRESH_TOKEN_DAUGHTER }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
+
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
+
+      - name: Determine run mode (Weekday Meal vs Weekend Psalm)
+        id: check-mode
+        run: |
+          FORCE_MODE="${{ inputs.force_mode || 'auto' }}"
+          KST_DOW=$(TZ=Asia/Seoul date +%u)
+          echo "KST Day of Week: $KST_DOW (1=Mon ... 6=Sat, 7=Sun), Force Mode: $FORCE_MODE"
+
+          if [ "$FORCE_MODE" = "psalm" ]; then
+            echo "is_weekend=true" >> "$GITHUB_OUTPUT"
+          elif [ "$FORCE_MODE" = "meal" ]; then
+            echo "is_weekend=false" >> "$GITHUB_OUTPUT"
+          elif [ "$KST_DOW" -eq 6 ] || [ "$KST_DOW" -eq 7 ]; then
+            echo "is_weekend=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_weekend=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Send weekend Psalm
         id: send-psalm
-        if: github.event_name == 'schedule' && github.event.schedule == '0 18 * * 5,6'
+        if: steps.check-mode.outputs.is_weekend == 'true'
         run: python main.py --send-weekend-psalm
+
       - name: Commit sent Psalm history
-        if: always() && github.event_name == 'schedule' && github.event.schedule == '0 18 * * 5,6'
+        if: always() && steps.check-mode.outputs.is_weekend == 'true'
         run: |
           git add data/weekend_psalm_history.json
           if git diff --cached --quiet; then
@@ -57,13 +93,14 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "Record weekend Psalm delivery"
           git push origin HEAD:main
+
       - name: Check and send meal
-        if: github.event_name != 'schedule' || github.event.schedule != '0 18 * * 5,6'
+        if: steps.check-mode.outputs.is_weekend == 'false'
         run: python main.py
 
   build-pages:
     needs: send-meal
-    if: always() && github.event_name == 'schedule' && github.event.schedule == '0 18 * * 5,6'
+    if: always() && needs.send-meal.result == 'success' && needs.send-meal.outputs.is_weekend == 'true'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

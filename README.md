@@ -5,7 +5,7 @@ NEIS(나이스) Open API에서 급식 메뉴와 열량을 조회해, 평일 당�
 ## 먼저 알아둘 점
 
 - 카카오톡 메시지 API 사용은 카카오 앱 설정과 사용자 동의 항목의 승인이 필요할 수 있습니다. Kakao Developers에서 메시지 API와 `talk_message` 동의 항목의 현재 사용 가능 여부를 확인하세요.
-- 이 프로젝트는 GitHub Secrets에서 읽은 refresh token을 로그에 출력하지 않습니다. 단, 카카오가 갱신 응답에서 새 refresh token을 발급한 경우 자동으로 GitHub Secret에 기록할 수 없으므로 로그 경고에 따라 Secret 값을 업데이트해야 합니다.
+- 이 프로젝트는 GitHub Secrets에서 읽은 refresh token을 로그에 출력하지 않습니다. 카카오가 새 refresh token을 발급하면 GitHub Actions가 해당 계정의 저장소 Secret을 자동으로 교체합니다. 이를 위해 워크플로에 `actions: write` 권한이 필요합니다.
 - GitHub Actions의 예약 실행은 혼잡도에 따라 지연될 수 있습니다. 급식 알림은 평일 당일 02:25, 주말 시편은 03:00 KST를 기준으로 예약합니다.
 
 ## 1. 템플릿 저장소 만들기
@@ -77,7 +77,9 @@ python get_tokens.py
 
 갱신 대상은 인증서가 아니라 카카오 **refresh token**입니다. 기본 유효기간은 2개월이며, 만료 1개월 전부터 갱신할 수 있습니다. 카카오가 새 토큰을 반환하면 기존 토큰은 폐기됩니다. [카카오 토큰 안내](https://developers.kakao.com/docs/ko/kakaologin/common)
 
-알림 메시지를 받으면 다음 순서로 갱신합니다.
+카카오 갱신 응답에 새 refresh token이 포함되면 해당 값은 GitHub Secret에 자동 저장되며, 토큰 값은 로그나 알림에 표시되지 않습니다. Actions의 `actions: write` 권한이 없거나 GitHub API 저장이 실패하면 Actions 로그에 오류가 표시됩니다. 이 경우 아래 절차로 토큰을 다시 발급하고 Secret을 수동 교체하세요.
+
+수동 재발급 절차:
 
 1. 저장소에서 가상환경을 활성화하고, 최초 발급 때와 같은 앱의 REST API 키를 설정합니다.
 
@@ -90,7 +92,7 @@ python get_tokens.py
 
    Client Secret이 꺼져 있다면 `export KAKAO_CLIENT_SECRET=...` 대신 `unset KAKAO_CLIENT_SECRET`을 실행합니다.
 2. `http://127.0.0.1:5000`에서 해당 카카오 계정으로 로그인하고 동의한 뒤 새 refresh token을 복사합니다.
-3. GitHub **Settings → Secrets and variables → Actions**에서 갱신 안내에 표시된 해당 계정 Secret(예: `KAKAO_REFRESH_TOKEN_WIFE`)만 새 토큰으로 교체합니다. 토큰은 채팅이나 코드에 붙여넣지 않습니다.
+3. GitHub **Settings → Secrets and variables → Actions**에서 해당 계정 Secret(예: `KAKAO_REFRESH_TOKEN_WIFE`)을 새 토큰으로 교체합니다. 토큰은 채팅이나 코드에 붙여넣지 않습니다.
 4. Actions에서 워크플로를 수동 실행해 전송을 확인하고, 로컬 서버는 `Ctrl+C`로 종료합니다.
 
 갱신 때 자주 발생하는 설정 오류:
@@ -111,7 +113,7 @@ python get_tokens.py
 - 급식 대상일이 토요일·일요일 또는 한국 공휴일이면 NEIS 급식 조회와 급식 메시지 발송을 건너뛰고, 요약에 사유를 표시합니다. 평일 중식은 메뉴가 등록된 경우 발송합니다. 석식은 공휴일이 아닌 화요일과 목요일에만 별도 메시지로 발송합니다. 카카오 텍스트 템플릿의 200자 제한을 넘으면 메뉴 끝을 줄여 전송합니다.
 - NEIS 요청이 실패하면 배우자와 딸에게 시스템 오류 메시지를 보내지 않습니다. 본인 계정으로만 안내하며, GitHub Actions 실행도 실패로 표시합니다.
 - 한 카카오 계정이 만료/실패해도 다른 계정 전송은 계속됩니다. 일부 수신자만 실패해도 실행을 실패로 표시하고, 원인 안내는 본인 계정으로만 보냅니다. 본인 계정 전송 자체가 실패하면 안내 메시지를 받을 수 없으므로 Actions 로그를 확인합니다.
-- refresh token이 교체되면 본인 계정으로 해당 가족 Secret의 갱신 안내를 보냅니다. 배우자와 딸에게는 기술 안내를 보내지 않습니다. 새 토큰 값은 알림에 포함하지 않습니다. 메시지에 표시된 해당 계정 Secret만 교체하세요.
+- 카카오 갱신 응답에 새 refresh token이 포함되면 해당 계정의 GitHub Secret에 자동 저장됩니다. 자동 저장 실패 시 Actions 로그를 확인하고 해당 계정 Secret을 수동으로 재발급·교체하세요.
 - 토요일과 일요일 오전 3시에는 [55주 시편 목록](weekend_psalms.md)을 순서대로 순환해 설정된 가족 계정마다 하루 한 구절씩 보냅니다. 첫 주는 2026년 10월 17일에 시작하며, 매주 같은 항목의 토요일·일요일 구절을 보냅니다. WEB Updated는 퍼블릭 도메인 번역이며, 카카오 메시지에는 구절과 장절이 들어갑니다.
 - 주말 시편 카카오톡 메시지 하단에 [금동이네 주말 시편 기록](https://jinugkim.github.io/school-meal/) 주소를 함께 보냅니다. 발송에 성공한 시편은 날짜와 문구를 페이지에 누적하며, 토·일 발송 실행이 끝나면 GitHub Pages도 자동 갱신됩니다.
 - 시편 목록은 정확히 55주 순서인지, 각 주에 토·일 구절이 있고 형식이 맞는지, 메시지가 200자 이내인지 검사합니다. 로컬에서는 `python main.py --validate-weekend-psalms`로 확인할 수 있으며, 목록이나 검증 코드가 바뀌면 GitHub Actions에서도 자동 검증합니다.

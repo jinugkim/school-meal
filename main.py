@@ -1,14 +1,17 @@
 """Fetch today's NEIS meal and send a KakaoTalk memo to each configured recipient."""
 
+import base64
 import json
 import logging
 import os
 import re
 import sys
 from datetime import date, datetime, timedelta
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 import requests
+from nacl.public import PublicKey, SealedBox
 import holidays
 
 logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO").upper(), format="%(levelname)s: %(message)s")
@@ -178,7 +181,7 @@ def school_day_skip_reason(meal_day):
     return f"한국 공휴일: {holiday_name}" if holiday_name else None
 
 
-def get_access_token(refresh_token, rest_api_key, client_secret="", secret_name="KAKAO_REFRESH_TOKENS"):
+def get_access_token(refresh_token, rest_api_key, client_secret=""):
     data = {"grant_type": "refresh_token", "client_id": rest_api_key, "refresh_token": refresh_token}
     if client_secret:
         data["client_secret"] = client_secret
@@ -202,11 +205,37 @@ def get_access_token(refresh_token, rest_api_key, client_secret="", secret_name=
     token = payload.get("access_token")
     if not token:
         raise RuntimeError("카카오 토큰 응답에 access_token이 없습니다.")
-    # Kakao may rotate refresh tokens. The new value must be saved back to the repository secret.
-    refresh_token_rotated = bool(payload.get("refresh_token"))
-    if refresh_token_rotated:
-        logger.warning("Kakao refresh token rotated; update %s secret with the new value.", secret_name)
-    return token, refresh_token_rotated
+    return token, payload.get("refresh_token")
+
+
+def update_github_secret(secret_name, secret_value):
+    """Encrypt and store a rotated Kakao refresh token in this repository's Actions secrets."""
+    github_token = os.environ.get("GH_TOKEN", "").strip()
+    repository = os.environ.get("GITHUB_REPOSITORY", "").strip()
+    if not github_token or not repository:
+        raise RuntimeError("GitHub secret 자동 갱신에 필요한 GH_TOKEN 또는 GITHUB_REPOSITORY가 없습니다.")
+
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {github_token}",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    base_url = f"https://api.github.com/repos/{repository}/actions/secrets"
+    response = requests.get(f"{base_url}/public-key", headers=headers, timeout=20)
+    response.raise_for_status()
+    public_key = response.json()
+    encrypted_value = SealedBox(PublicKey(base64.b64decode(public_key["key"]))).encrypt(
+        secret_value.encode("utf-8")
+    ).hex()
+
+    response = requests.put(
+        f"{base_url}/{quote(secret_name, safe='')}",
+        headers=headers,
+        json={"encrypted_value": encrypted_value, "key_id": public_key["key_id"]},
+        timeout=20,
+    )
+    response.raise_for_status()
+    logger.info("Kakao refresh token을 GitHub Actions secret %s에 자동 저장했습니다.", secret_name)
 
 
 def send_kakao_message(
@@ -363,12 +392,14 @@ def send_weekend_psalm():
     successful_deliveries = 0
     for index, (recipient_name, secret_name, refresh_token) in enumerate(recipients, start=1):
         try:
-            access_token, refresh_token_rotated = get_access_token(
-                refresh_token, kakao_key, client_secret, secret_name
+            access_token, rotated_refresh_token = get_access_token(
+                refresh_token, kakao_key, client_secret
             )
+            if rotated_refresh_token:
+                update_github_secret(secret_name, rotated_refresh_token)
         except Exception:
             failures += 1
-            logger.exception("%s 계정의 주말 시편 발송용 토큰 갱신에 실패했습니다.", recipient_name)
+            logger.exception("%s 계정의 주말 시편용 토큰 갱신 또는 Secret 자동 저장에 실패했습니다.", recipient_name)
             technical_alerts.append(
                 f"{recipient_name} 계정의 주말 시편 토큰 갱신에 실패했습니다. {secret_name}과 Actions 로그를 확인해 주세요."
             )
@@ -394,11 +425,6 @@ def send_weekend_psalm():
                 f"{recipient_name} 계정으로 주말 시편을 보내지 못했습니다. Actions 로그를 확인해 주세요."
             )
             recipient_results.append((recipient_name, "실패 (메시지 전송)"))
-
-        if refresh_token_rotated:
-            technical_alerts.append(
-                f"{recipient_name} 계정 refresh token이 교체됐습니다. 새 토큰을 발급해 GitHub Secret {secret_name}을 갱신해 주세요."
-            )
 
     if successful_deliveries:
         record_weekend_psalm_delivery(today, message)
@@ -515,13 +541,15 @@ def main():
     recipient_results = []
     for index, (recipient_name, secret_name, refresh_token) in enumerate(recipients, start=1):
         try:
-            access_token, refresh_token_rotated = get_access_token(
-                refresh_token, kakao_key, client_secret, secret_name
+            access_token, rotated_refresh_token = get_access_token(
+                refresh_token, kakao_key, client_secret
             )
+            if rotated_refresh_token:
+                update_github_secret(secret_name, rotated_refresh_token)
             account_access_tokens[recipient_name] = access_token
         except Exception:
             failures += 1
-            logger.exception("수신자 %s (%d/%d) 토큰 갱신 실패; 다음 계정을 계속 처리합니다.", recipient_name, index, len(recipients))
+            logger.exception("수신자 %s (%d/%d) 토큰 갱신 또는 Secret 자동 저장 실패; 다음 계정을 계속 처리합니다.", recipient_name, index, len(recipients))
             technical_alerts.append(f"{recipient_name} 계정의 카카오 토큰 갱신에 실패했습니다. {secret_name}과 Actions 로그를 확인해 주세요.")
             recipient_results.append((recipient_name, "실패 (토큰 갱신)"))
             continue
@@ -541,11 +569,6 @@ def main():
                 )
                 technical_alerts.append(f"{recipient_name} 계정으로 급식 메시지를 보내지 못했습니다. Actions 로그를 확인해 주세요.")
                 meal_results.append(f"{meal_names[message_index - 1]} 실패")
-
-        if refresh_token_rotated:
-            technical_alerts.append(
-                f"{recipient_name} 계정 refresh token이 교체됐습니다. 새 토큰을 발급해 GitHub Secret {secret_name}을 갱신해 주세요."
-            )
 
         if recipient_failed:
             failures += 1
