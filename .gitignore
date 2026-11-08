@@ -22,3 +22,5 @@ ENV/
 # Local logs / secrets
 *.log
 token*.json
+*.jpg
+*.code-workspace
