@@ -23,6 +23,114 @@ WEEKEND_PSALM_START = date(2026, 10, 17)
 WEEKEND_PSALM_HISTORY_PATH = os.path.join(os.path.dirname(__file__), "data", "weekend_psalm_history.json")
 WEEKEND_PSALM_PAGE_URL = "https://jinugkim.github.io/school-meal/"
 
+COURIER_DEFAULT_WORKER_URL = "https://courier-kakao-auth.jinug-kim.workers.dev"
+COURIER_DEFAULT_RECIPIENTS = ["ME", "EUNMI", "YUJU"]
+COURIER_OWNER = "jinugkim"
+COURIER_REPO = "courier"
+COURIER_PROJECT = "school-meal"
+
+
+def has_courier_config():
+    """Return True if Courier tokens or dispatch tokens are available in the environment."""
+    return bool(
+        (os.environ.get("COURIER_WORKER_URL") and (os.environ.get("COURIER_SYNC_TOKEN") or os.environ.get("KAKAO_SYNC_TOKEN")))
+        or os.environ.get("COURIER_DISPATCH_TOKEN")
+        or os.environ.get("COURIER_SYNC_TOKEN")
+    )
+
+
+def send_via_courier(
+    message,
+    request_id,
+    link_url="https://open.neis.go.kr",
+    button_title="나이스 급식 정보",
+    recipients=None,
+):
+    """Deliver a message to family recipients via the central Courier service."""
+    if recipients is None:
+        recipients_env = os.environ.get("COURIER_RECIPIENTS", "").strip()
+        if recipients_env:
+            try:
+                recipients = json.loads(recipients_env)
+            except Exception:
+                recipients = [r.strip().upper() for r in recipients_env.split(",") if r.strip()]
+        else:
+            recipients = COURIER_DEFAULT_RECIPIENTS
+
+    # 1. Cloudflare Worker direct send (Fast path: < 0.3s)
+    worker_url = (
+        os.environ.get("COURIER_WORKER_URL")
+        or os.environ.get("KAKAO_SYNC_URL")
+        or COURIER_DEFAULT_WORKER_URL
+    ).strip().rstrip("/")
+    sync_token = (
+        os.environ.get("COURIER_SYNC_TOKEN")
+        or os.environ.get("KAKAO_SYNC_TOKEN")
+        or ""
+    ).strip()
+
+    if worker_url and sync_token:
+        try:
+            worker_payload = {
+                "request_id": request_id,
+                "project": COURIER_PROJECT,
+                "message": message,
+                "recipients": recipients,
+                "link_url": link_url,
+                "button_title": button_title,
+            }
+            res = requests.post(
+                f"{worker_url}/internal/send",
+                headers={"Authorization": f"Bearer {sync_token}", "Content-Type": "application/json"},
+                json=worker_payload,
+                timeout=15,
+            )
+            if res.status_code == 200:
+                logger.info("Cloudflare Worker 직접 전송 성공 (HTTP 200, request_id: %s)", request_id)
+                return True
+            logger.warning(
+                "Cloudflare Worker 직접 전송 실패 (HTTP %s): %s, GitHub dispatch로 대체합니다.",
+                res.status_code,
+                res.text,
+            )
+        except Exception as exc:
+            logger.warning("Cloudflare Worker 직접 전송 예외 (%s), GitHub dispatch로 대체합니다.", exc)
+
+    # 2. Fall back to GitHub repository_dispatch
+    token = (
+        os.environ.get("COURIER_DISPATCH_TOKEN")
+        or os.environ.get("GH_PAT")
+        or ""
+    ).strip()
+    if not token:
+        raise RuntimeError("Courier 전송에 필요한 토큰(COURIER_SYNC_TOKEN 또는 COURIER_DISPATCH_TOKEN)이 설정되지 않았습니다.")
+
+    dispatch_url = f"https://api.github.com/repos/{COURIER_OWNER}/{COURIER_REPO}/dispatches"
+    payload = {
+        "event_type": "send-kakao-msg",
+        "client_payload": {
+            "request_id": request_id,
+            "project": COURIER_PROJECT,
+            "message": message,
+            "recipients": recipients,
+            "link_url": link_url,
+            "button_title": button_title,
+        },
+    }
+    response = requests.post(
+        dispatch_url,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+        json=payload,
+        timeout=20,
+    )
+    response.raise_for_status()
+    logger.info("Courier GitHub repository_dispatch 트리거 성공 (request_id: %s)", request_id)
+    return True
+
 
 def record_weekend_psalm_delivery(delivery_date, message):
     """Persist one date/message row after at least one recipient received it."""
@@ -382,6 +490,33 @@ def send_weekend_psalm():
         "토요일" if message_index == 0 else "일요일",
     )
 
+    if has_courier_config():
+        logger.info("중앙 라우터(Courier)를 통해 주말 시편을 발송합니다.")
+        request_id = f"school-meal:psalm:{today.isoformat()}"
+        try:
+            send_via_courier(
+                message=delivery_message,
+                request_id=request_id,
+                link_url="https://ebible.org/engwebu/",
+                button_title="Psalms",
+            )
+            record_weekend_psalm_delivery(today, message)
+            logger.info("시편 발송 기록을 날짜별 목록에 저장했습니다.")
+            log_run_summary(
+                today,
+                f"주말 시편 {week_number}주차 ({'토요일' if message_index == 0 else '일요일'})",
+                [("가족 전체", "성공 (Courier)")],
+            )
+            return 0
+        except Exception:
+            logger.exception("주말 시편 Courier 발송 실패")
+            log_run_summary(
+                today,
+                f"주말 시편 {week_number}주차 ({'토요일' if message_index == 0 else '일요일'})",
+                [("가족 전체", "실패 (Courier)")],
+            )
+            return 1
+
     kakao_key = required_env("KAKAO_REST_API_KEY")
     recipients = load_refresh_tokens()
     client_secret = os.environ.get("KAKAO_CLIENT_SECRET", "").strip()
@@ -531,13 +666,50 @@ def main():
         messages = []
         neis_failed = True
 
+    meal_names = [meal[0] for meal in meals]
+
+    if has_courier_config():
+        logger.info("중앙 라우터(Courier)를 통해 카카오톡 메시지를 발송합니다.")
+        failures = 0
+        meal_results = []
+        meal_type_map = {"조식": "breakfast", "중식": "lunch", "석식": "dinner"}
+        for message_index, (meal_item, message) in enumerate(zip(meals, messages), start=1):
+            meal_name = meal_item[0]
+            meal_slug = meal_type_map.get(meal_name, f"meal-{message_index}")
+            request_id = f"school-meal:{meal_date}:{meal_slug}"
+            try:
+                send_via_courier(
+                    message=message,
+                    request_id=request_id,
+                    link_url="https://open.neis.go.kr",
+                    button_title="나이스 급식 정보",
+                )
+                logger.info("메시지 %d/%d (%s) Courier 발송 완료 (request_id: %s)", message_index, len(messages), meal_name, request_id)
+                meal_results.append((meal_name, "성공 (Courier)"))
+            except Exception:
+                failures += 1
+                logger.exception("메시지 %d/%d (%s) Courier 발송 실패", message_index, len(messages), meal_name)
+                meal_results.append((meal_name, "실패 (Courier)"))
+
+        if meal_names:
+            summary_meals = ", ".join(meal_names)
+            no_send_reason = None
+        elif neis_failed:
+            summary_meals = "급식 정보 없음"
+            no_send_reason = "NEIS 조회 실패"
+        else:
+            summary_meals = "급식 정보 없음"
+            no_send_reason = "등록된 급식 정보 없음"
+
+        log_run_summary(meal_day, summary_meals, meal_results, no_send_reason)
+        return 1 if failures else 0
+
     kakao_key = required_env("KAKAO_REST_API_KEY")
     recipients = load_refresh_tokens()
     client_secret = os.environ.get("KAKAO_CLIENT_SECRET", "").strip()
 
     failures = 0
     account_access_tokens = {}
-    meal_names = [meal[0] for meal in meals]
     recipient_results = []
     for index, (recipient_name, secret_name, refresh_token) in enumerate(recipients, start=1):
         try:

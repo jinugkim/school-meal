@@ -37,12 +37,14 @@ flowchart TD
 
 ---
 
-## 3. 카카오톡 인증 및 토큰 자동 갱신 구조
-- **독립형 자체 발송**: 중앙 라우터(`courier`)를 거치지 않고 `school-meal` 내부의 `main.py`가 카카오 OAuth 토큰 관리 및 발송을 직접 수행함.
-- **토큰 자동 로테이션**:
-  - 카카오 refresh token은 2개월 유효기간을 가지며, 만료 1개월 전부터 갱신 시 새 refresh token이 발급됨.
-  - 새 refresh token이 발급되면 `update_github_secret()` 함수가 `PyNaCl`을 사용하여 **GitHub Actions 저장소 Secret을 자동으로 최신화**함. (수동 토큰 교체 필요 없음)
-  - 토큰 갱신 실패 등 시스템 오류 발생 시 본인 계정으로만 기술 안내 알림이 전송됨.
+## 3. 카카오톡 발송 및 인증 구조 (Courier 중앙 라우터 연동)
+- **중앙 라우터(`courier`) 연동 (방안 A)**:
+  - 개별 레포지토리에서 카카오 OAuth 토큰 관리나 Secret 갱신을 직접 수행하지 않고, 중앙 카카오톡 라우터 서비스인 `courier`에 발송을 위임함.
+  - **1순위 (Fast Path)**: `COURIER_WORKER_URL`과 `COURIER_SYNC_TOKEN`이 구성된 경우 Cloudflare Worker 직접 호출 (`POST /internal/send`, < 0.3초).
+  - **2순위 (Fallback)**: `COURIER_DISPATCH_TOKEN`을 통해 GitHub `repository_dispatch` 호출 (`jinugkim/courier`).
+- **가족 토큰 중앙 집중화**:
+  - 가족(본인, 배우자, 딸) 카카오 refresh token은 `courier`의 Cloudflare D1에 안전하게 보관·자동 갱신됨.
+  - GitHub Actions의 Secrets 쓰기 권한 부족(`403 Forbidden`) 문제 및 토큰 회전(rotation) 누락 문제가 완전히 해소됨.
 
 ---
 

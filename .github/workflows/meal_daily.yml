@@ -39,6 +39,9 @@ jobs:
       NEIS_API_KEY: ${{ secrets.NEIS_API_KEY }}
       OFFICE_CODE: ${{ secrets.OFFICE_CODE }}
       SCHOOL_CODE: ${{ secrets.SCHOOL_CODE }}
+      COURIER_DISPATCH_TOKEN: ${{ secrets.COURIER_DISPATCH_TOKEN || secrets.GH_PAT }}
+      COURIER_WORKER_URL: ${{ vars.COURIER_WORKER_URL }}
+      COURIER_SYNC_TOKEN: ${{ secrets.COURIER_SYNC_TOKEN }}
       KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
       KAKAO_CLIENT_SECRET: ${{ secrets.KAKAO_CLIENT_SECRET }}
       KAKAO_REFRESH_TOKENS: ${{ secrets.KAKAO_REFRESH_TOKENS }}
