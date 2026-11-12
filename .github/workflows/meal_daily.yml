@@ -1,12 +1,6 @@
 name: Daily school meal
 
 on:
-  schedule:
-    # Backup cron triggers (GitHub-hosted cron may have delays, Cloud Scheduler is primary)
-    # 02:25 KST, Monday to Friday (17:25 UTC, Sunday to Thursday)
-    - cron: "25 17 * * 0-4"
-    # 03:00 KST on Saturdays and Sundays (18:00 UTC, Friday and Saturday)
-    - cron: "0 18 * * 5,6"
   workflow_dispatch:
     inputs:
       force_mode:

@@ -28,12 +28,15 @@ flowchart TD
     end
 ```
 
-- **트리거 인프라**: **Google Cloud Scheduler**
+- **트리거 인프라**: **Google Cloud Scheduler (단독 트리거)**
   - 작업 이름: `school-meal-daily`
   - 리전: `asia-northeast3` (서울)
   - 빈도: `30 6 * * *` (KST 매일 아침 06:30)
   - 호출 대상: `POST https://api.github.com/repos/jinugkim/school-meal/actions/workflows/meal_daily.yml/dispatches`
-- **정시성**: GitHub Actions 내장 크론 큐의 지연을 우회하여 **매일 아침 6시 30분에 1~2분 내로 정확히 발송**됨.
+- **정시성 & 중복 방지**:
+  - GitHub Actions 내장 cron은 심한 지연 및 이중 발송을 유발하므로 워크플로에서 완전히 제거됨.
+  - Google Cloud Scheduler를 통해 **매일 아침 6시 30분에 1~2분 내로 1회만 정확히 발송**됨.
+  - Courier의 `request_id`(`school-meal:YYYY-MM-DD:lunch/dinner`)를 통해 동일 날짜 중복 실행 시에도 자동 스킵됨.
 
 ---
 

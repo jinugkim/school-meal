@@ -676,7 +676,7 @@ def main():
         for message_index, (meal_item, message) in enumerate(zip(meals, messages), start=1):
             meal_name = meal_item[0]
             meal_slug = meal_type_map.get(meal_name, f"meal-{message_index}")
-            request_id = f"school-meal:{meal_date}:{meal_slug}"
+            request_id = f"school-meal:{meal_day.strftime('%Y-%m-%d')}:{meal_slug}"
             try:
                 send_via_courier(
                     message=message,
